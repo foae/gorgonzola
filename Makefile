@@ -15,6 +15,8 @@ test:
 run: install_gorgonzola
 	HTTP_LISTEN_ADDR="127.0.0.1:8000" \
 	DNS_LISTEN_ADDR="127.0.0.1:53" \
+	DNS_LISTEN_PORT=":53" \
+	DNS_LISTEN_IP="127.0.0.1" \
 	API_AUTH_SECRET="foobar" \
 	GORGONZOLA_BASE_URL="http://127.0.0.1:8000" \
 	ENV="dev" \
