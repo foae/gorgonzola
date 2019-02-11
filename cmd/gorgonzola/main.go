@@ -31,13 +31,12 @@ func main() {
 
 	log.Println("Waiting for UDP connections...")
 	for {
-		buf := make([]byte, 4096)
+		buf := make([]byte, 512)
 		_, udpAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			log.Fatalf("could not read from UDP connection: %v", err)
 		}
-		log.Println("----------------------------------------------")
-		log.Printf("received UDP message from: %v", udpAddr.String())
+		log.Printf("Received UDP message from: %v", udpAddr.String())
 
 		// Unpack and validate the received message.
 		var m dnsmessage.Message
@@ -71,7 +70,8 @@ func main() {
 				m.Response = true
 				m.OpCode = 0
 				m.RCode = dnsmessage.RCodeSuccess
-				m.Answers = make([]dnsmessage.Resource, 1)
+				m.Authoritative = true
+				m.Answers = make([]dnsmessage.Resource, 2)
 				m.Answers[0] = dnsmessage.Resource{
 					Header: dnsmessage.ResourceHeader{
 						TTL:    0,
@@ -82,6 +82,18 @@ func main() {
 					},
 					Body: &dnsmessage.AResource{
 						A: [4]byte{127, 0, 0, 1},
+					},
+				}
+				m.Answers[1] = dnsmessage.Resource{
+					Header: dnsmessage.ResourceHeader{
+						TTL:    0,
+						Length: 16,
+						Type:   m.Questions[0].Type,
+						Name:   m.Questions[0].Name,
+						Class:  m.Questions[0].Class,
+					},
+					Body: &dnsmessage.AAAAResource{
+						AAAA: [16]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, // is this correct?
 					},
 				}
 				packed, err := m.Pack()
@@ -107,8 +119,7 @@ func main() {
 			if _, err := conn.WriteToUDP(packed, resolver); err != nil {
 				log.Fatalf("could not write to Cloudflare UDP connection: %v", err)
 			}
-			log.Println("----------------------------------------------")
-			log.Printf("forwarded to Cloudflare: %v", resolver.String())
+			log.Printf("Forwarded to Cloudflare: %v", resolver.String())
 
 			// Keep track of the originator so we can respond back.
 			respMap.store(m.ID, udpAddr)
@@ -133,8 +144,7 @@ func main() {
 			// we can safely delete the ID from our registry.
 			respMap.remove(m.ID)
 
-			log.Println("----------------------------------------------")
-			log.Printf("responded to original requester: %v", originator.String())
+			log.Printf("Responded to original requester: %v", originator.String())
 		}
 	}
 }
