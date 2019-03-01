@@ -11,17 +11,9 @@ type Registry struct {
 	l *sync.RWMutex
 }
 
-// NewWhitelist returns a new Registry reference.
-func NewWhitelist() *Registry {
-	return &Registry{
-		l: &sync.RWMutex{},
-		m: make(map[string]int64),
-	}
-}
-
-// NewFrom returns a new registry reference with
+// NewRegistry returns a new registry reference with
 // all the items loaded from a given list.
-func NewFrom(list []string) *Registry {
+func NewRegistry(list []string) *Registry {
 	w := &Registry{
 		l: &sync.RWMutex{},
 		m: make(map[string]int64),
