@@ -1,2 +1,2 @@
-# golang.org/x/net v0.0.0-20190213061140-3a22650c66bd
+# golang.org/x/net v0.0.0-20190424112056-4829fb13d2c6
 golang.org/x/net/dns/dnsmessage

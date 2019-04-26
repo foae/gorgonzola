@@ -11,8 +11,8 @@ type ResponseRegistry struct {
 	l *sync.RWMutex
 }
 
-// NewResponseMap returns a new ResponseRegistry reference.
-func NewResponseMap() *ResponseRegistry {
+// NewResponseRegistry returns a new ResponseRegistry reference.
+func NewResponseRegistry() *ResponseRegistry {
 	return &ResponseRegistry{
 		l: &sync.RWMutex{},
 		m: make(map[uint16]*net.UDPAddr),
@@ -28,7 +28,12 @@ func (rr ResponseRegistry) store(messageID uint16, addr *net.UDPAddr) {
 func (rr ResponseRegistry) retrieve(messageID uint16) *net.UDPAddr {
 	rr.l.RLock()
 	defer rr.l.RUnlock()
-	return rr.m[messageID]
+	f, found := rr.m[messageID]
+	if !found {
+		return nil
+	}
+
+	return f
 }
 
 func (rr ResponseRegistry) remove(messageID uint16) {

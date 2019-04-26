@@ -19,9 +19,6 @@ func main() {
 	}
 	defer conn.Close()
 
-	// Load the whitelist
-	whitelist := NewRegistry([]string{"cloudflare.com"})
-
 	// Load the blacklist
 	blacklist := NewRegistry([]string{
 		"ads.google.com",
@@ -32,11 +29,11 @@ func main() {
 
 	// Keep track of all UDP messages
 	// that need to be reconciled.
-	respMap := NewResponseMap()
+	respMap := NewResponseRegistry()
 
 	log.Println("Waiting for UDP connections...")
 	for {
-		buf := make([]byte, 1024)
+		buf := make([]byte, 576)
 		_, udpAddr, err := conn.ReadFromUDP(buf)
 		if err != nil {
 			log.Fatalf("could not read from UDP connection: %v", err)
@@ -52,44 +49,28 @@ func main() {
 		switch m.Header.Response {
 		case false:
 			// This a new request that hasn't been resolved.
-			// Check if it's in the whitelist.
-			var isWhitelisted bool
+			// Check if it's in the blacklist
+			var isBlacklisted bool
 			for _, q := range m.Questions {
-				if whitelist.exists(q.Name.String()) {
-					isWhitelisted = true
+				if blacklist.exists(q.Name.String()) {
+					isBlacklisted = true
 					break
 				}
 			}
 
-			// TODO: cleanup. We can do better than this.
-			if !isWhitelisted {
-				// Check if it's in the blacklist
-				var isBlacklisted bool
-				for _, q := range m.Questions {
-					if blacklist.exists(q.Name.String()) {
-						isBlacklisted = true
-						break
-					}
-				}
+			if isBlacklisted {
+				log.Printf("Found in blacklist: %v", isBlacklisted)
+				// Replace contents of the DNS message.
+				m = block(m)
 
-				if isBlacklisted {
-					log.Printf("Found in blacklist: %v", isBlacklisted)
-					m.Response = true
-					m.OpCode = 0
-					m.RCode = dnsmessage.RCodeSuccess
-					m.Authoritative = true
-					// Replace contents of the DNS message.
-					m = block(m)
-
-					packed, err := m.Pack()
-					if err != nil {
-						log.Fatalf("could not pack dns message: %v", err)
-					}
-					if _, err := conn.WriteToUDP(packed, udpAddr); err != nil {
-						log.Fatalf("could not write to blacklisted UDP connection: %v", err)
-					}
-					continue
+				packed, err := m.Pack()
+				if err != nil {
+					log.Fatalf("could not pack dns message: %v", err)
 				}
+				if _, err := conn.WriteToUDP(packed, udpAddr); err != nil {
+					log.Fatalf("could not write to blacklisted UDP connection: %v", err)
+				}
+				continue
 			}
 
 			// This is an incoming DNS request that hasn't been "resolved".
@@ -141,6 +122,7 @@ func mustGetEnv(value string) string {
 	if v == "" {
 		log.Fatalf("could not retrieve needed value (%v) from the environment", value)
 	}
+
 	return v
 }
 

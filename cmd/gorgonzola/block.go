@@ -6,6 +6,11 @@ import (
 )
 
 func block(m dnsmessage.Message) dnsmessage.Message {
+	m.Response = true
+	m.OpCode = 0
+	m.RCode = dnsmessage.RCodeSuccess
+	m.Authoritative = true
+
 	c := m
 	c.Answers = make([]dnsmessage.Resource, 1)
 

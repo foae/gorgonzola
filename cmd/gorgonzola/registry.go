@@ -32,8 +32,9 @@ func (wr Registry) exists(domain string) bool {
 	domain = strings.TrimSuffix(domain, ".")
 
 	wr.l.RLock()
-	defer wr.l.RUnlock()
 	_, found := wr.m[domain]
+	wr.l.RUnlock()
+
 	return found
 }
 
@@ -57,8 +58,10 @@ func (wr Registry) retrieve(domain string) int64 {
 	domain = strings.TrimSuffix(domain, ".")
 
 	wr.l.RLock()
-	defer wr.l.RUnlock()
-	return wr.m[domain]
+	f := wr.m[domain]
+	wr.l.RUnlock()
+
+	return f
 }
 
 func (wr Registry) remove(domain string) {
