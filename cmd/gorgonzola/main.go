@@ -1,16 +1,30 @@
 package main
 
 import (
+	"fmt"
 	"golang.org/x/net/dns/dnsmessage"
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
+	"time"
 )
 
 func main() {
 	upstreamDNS := mustGetEnv("UPSTREAM_DNS_SERVER_IP")
 	localDNSPort := mustGetEnvInt("DNS_LISTEN_PORT")
+	env := mustGetEnv("ENV")
+
+	ballast := make([]byte, 1<<20)
+	_ = ballast
+	if env == "dev" {
+		go func() {
+			for range time.Tick(time.Second) {
+				PrintMemUsage()
+			}
+		}()
+	}
 
 	// Fire up the UDP listener.
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: localDNSPort})
@@ -87,7 +101,7 @@ func main() {
 				log.Printf("could not write to upstream DNS UDP connection: %v", err)
 				continue
 			}
-			log.Printf("Forwarded to upstream DNS: %v", resolver.String())
+			log.Printf("Forwarded to upstream DNS (%v): %v", resolver.String(), m.GoString())
 
 			// Keep track of the originator so we can respond back.
 			respMap.store(m.ID, udpAddr)
@@ -96,7 +110,7 @@ func main() {
 			// Check if we have a request that needs reconciliation.
 			originator := respMap.retrieve(m.ID)
 			if originator == nil {
-				log.Printf("found dangling DNS message ID: %v", m.ID)
+				log.Printf("found dangling DNS message ID (%v): %v", m.ID, m.GoString())
 				// Improvement: we can call the cleanup service on the registry.
 				continue
 			}
@@ -112,7 +126,7 @@ func main() {
 			// we can safely delete the ID from our registry.
 			respMap.remove(m.ID)
 
-			log.Printf("Responded to original requester: %v", originator.String())
+			log.Printf("Responded to original requester (%v): %v", originator.String(), m.GoString())
 		}
 	}
 }
@@ -138,4 +152,19 @@ func mustGetEnvInt(value string) int {
 	}
 
 	return i
+}
+
+func bToMb(b uint64) uint64 {
+	return b / 1024 / 1024
+}
+
+func PrintMemUsage() {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
+	fmt.Printf("Alloc: %v MB", bToMb(m.Alloc))
+	fmt.Printf("\tTotalAlloc: %v MB", bToMb(m.TotalAlloc))
+	fmt.Printf("\tSys: %v MB", bToMb(m.Sys))
+	fmt.Printf("\tNumGC: %v", m.NumGC)
+	fmt.Printf("\tHeap: alloc (%v) | idle (%v) | in use (%v) | obj (%v) | released (%v)\n", bToMb(m.HeapAlloc), bToMb(m.HeapIdle), bToMb(m.HeapInuse), m.HeapObjects, bToMb(m.HeapReleased))
 }
