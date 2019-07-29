@@ -1,3 +1,3 @@
 module github.com/foae/gorgonzola
 
-require golang.org/x/net v0.0.0-20190628185345-da137c7871d7
+require golang.org/x/net v0.0.0-20190724013045-ca1201d0de80
