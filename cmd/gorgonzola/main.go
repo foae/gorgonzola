@@ -21,7 +21,7 @@ func main() {
 	if env == "dev" {
 		go func() {
 			for range time.Tick(time.Second) {
-				PrintMemUsage()
+				printMemUsage()
 			}
 		}()
 	}
@@ -158,7 +158,7 @@ func bToMb(b uint64) uint64 {
 	return b / 1024 / 1024
 }
 
-func PrintMemUsage() {
+func printMemUsage() {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
