@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"sync"
 )
 
@@ -29,8 +28,6 @@ func NewRegistry(list []string) *Registry {
 }
 
 func (wr Registry) exists(domain string) bool {
-	domain = strings.TrimSuffix(domain, ".")
-
 	wr.l.RLock()
 	_, found := wr.m[domain]
 	wr.l.RUnlock()
@@ -47,16 +44,12 @@ func (wr Registry) load(list []string) {
 }
 
 func (wr Registry) store(domain string) {
-	domain = strings.TrimSuffix(domain, ".")
-
 	wr.l.Lock()
 	wr.m[domain]++
 	wr.l.Unlock()
 }
 
 func (wr Registry) retrieve(domain string) int64 {
-	domain = strings.TrimSuffix(domain, ".")
-
 	wr.l.RLock()
 	f := wr.m[domain]
 	wr.l.RUnlock()
@@ -65,8 +58,6 @@ func (wr Registry) retrieve(domain string) int64 {
 }
 
 func (wr Registry) remove(domain string) {
-	domain = strings.TrimSuffix(domain, ".")
-
 	wr.l.Lock()
 	delete(wr.m, domain)
 	wr.l.Unlock()

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"github.com/miekg/dns"
 	"go.uber.org/zap"
 	"log"
@@ -25,6 +26,12 @@ func main() {
 	// that need to be reconciled.
 	responseRegistry := NewResponseRegistry()
 	upstreamResolver := &net.UDPAddr{Port: 53, IP: net.ParseIP(upstreamDNS)}
+	blacklist := NewRegistry([]string{
+		"ads.google.com.",
+		"ad.google.com.",
+		"facebook.com.",
+		"microsoft.com.",
+	})
 
 	/*
 		Logging
@@ -71,23 +78,34 @@ func main() {
 				logger.Errorf("could not read message from (%v)", req.String())
 				continue
 			}
-			packedMsg, err := msg.Pack()
-			if err != nil {
-				logger.Errorf("could not pack dns message: %v", err)
-				continue
-			}
 
 			switch {
 			case msg.MsgHdr.Response == false:
-				// TODO: check if in blacklist
+				// Check if in blacklist.
+				if len(msg.Question) > 0 {
+					q := msg.Question[0]
+					if blacklist.exists(q.Name) {
+						msg.MsgHdr.Response = true
+						msg.MsgHdr.Opcode = dns.RcodeNameError
+						msg.MsgHdr.Authoritative = true
+						msg.Answer = make([]dns.RR, 0)
+						if err := packMsgAndSend(msg, conn, req, logger); err != nil {
+							logger.Errorf("could not write to upstream DNS UDP connection: %v", err)
+							continue
+						}
+
+						logger.Debugf("Blocked (%v): %v", upstreamResolver.String(), msg.Question)
+						continue
+					}
+				}
 
 				// Forward to upstream DNS.
-				if _, err := conn.WriteToUDP(packedMsg, upstreamResolver); err != nil {
+				if err := packMsgAndSend(msg, conn, upstreamResolver, logger); err != nil {
 					logger.Errorf("could not write to upstream DNS UDP connection: %v", err)
 					continue
 				}
 
-				// Keep track of the originator
+				// Keep track of the originalReq
 				// so that we can respond back.
 				responseRegistry.store(msg.Id, req)
 				logger.Debugf("Forwarded to upstream DNS (%v): %v", upstreamResolver.String(), msg.Question)
@@ -95,15 +113,15 @@ func main() {
 			case msg.MsgHdr.Response:
 				// This is a response.
 				// Check if we have a request that needs reconciliation.
-				originator := responseRegistry.retrieve(msg.Id)
-				if originator == nil {
+				originalReq := responseRegistry.retrieve(msg.Id)
+				if originalReq == nil {
 					logger.Errorf("found dangling DNS message ID (%v): %v", msg.Id, msg.Question)
 					continue
 				}
 
 				// Respond to the initial requester.
-				if _, err := conn.WriteToUDP(packedMsg, originator); err != nil {
-					logger.Errorf("could not write to original UDP connection (%v): %v", originator.String(), err)
+				if err := packMsgAndSend(msg, conn, originalReq, logger); err != nil {
+					logger.Errorf("could not write to original UDP connection (%v): %v", originalReq.String(), err)
 					continue
 				}
 
@@ -111,7 +129,7 @@ func main() {
 				// that the request was fulfilled and thus
 				// we can safely delete the ID from our registry.
 				responseRegistry.remove(msg.Id)
-				logger.Debugf("Responded to original requester (%v): %v", originator.String(), msg.Question)
+				logger.Debugf("Responded to original requester (%v): %v", originalReq.String(), msg.Question)
 			default:
 				logger.Warnw("received alien message",
 					"from", req.String(),
@@ -119,6 +137,7 @@ func main() {
 					"fullMsg", msg,
 				)
 			}
+
 		}
 	}()
 
@@ -126,4 +145,17 @@ func main() {
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	log.Fatalf("Stopped server, received signal (%v)", <-sig)
+}
+
+func packMsgAndSend(msg dns.Msg, conn *net.UDPConn, req *net.UDPAddr, logger *zap.SugaredLogger) error {
+	packed, err := msg.Pack()
+	if err != nil {
+		return fmt.Errorf("could not pack dns message: %v", err)
+	}
+
+	if _, err := conn.WriteToUDP(packed, req); err != nil {
+		return fmt.Errorf("could not write to upstream DNS UDP connection: %v", err)
+	}
+
+	return nil
 }
