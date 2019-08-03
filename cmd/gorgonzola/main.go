@@ -1,170 +1,136 @@
 package main
 
 import (
-	"fmt"
-	"golang.org/x/net/dns/dnsmessage"
+	"github.com/miekg/dns"
+	"go.uber.org/zap"
 	"log"
 	"net"
 	"os"
-	"runtime"
-	"strconv"
+	"os/signal"
+	"syscall"
 	"time"
 )
 
+// SOA is a string we will append everywhere in the zones values.
+const SOA string = "@ SOA prisoner.iana.org. hostmaster.root-servers.org. 2002040800 1800 900 0604800 604800"
+
+// NewRR is a shortcut to dns.NewRR that ignores the error.
+func NewRR(s string) dns.RR { r, _ := dns.NewRR(s); return r }
+
+var zones = map[string]dns.RR{
+	"10.in-addr.arpa.":      NewRR("$ORIGIN 10.in-addr.arpa.\n" + SOA),
+	"254.169.in-addr.arpa.": NewRR("$ORIGIN 254.169.in-addr.arpa.\n" + SOA),
+	"168.192.in-addr.arpa.": NewRR("$ORIGIN 168.192.in-addr.arpa.\n" + SOA),
+	"16.172.in-addr.arpa.":  NewRR("$ORIGIN 16.172.in-addr.arpa.\n" + SOA),
+	"17.172.in-addr.arpa.":  NewRR("$ORIGIN 17.172.in-addr.arpa.\n" + SOA),
+	"18.172.in-addr.arpa.":  NewRR("$ORIGIN 18.172.in-addr.arpa.\n" + SOA),
+	"19.172.in-addr.arpa.":  NewRR("$ORIGIN 19.172.in-addr.arpa.\n" + SOA),
+	"20.172.in-addr.arpa.":  NewRR("$ORIGIN 20.172.in-addr.arpa.\n" + SOA),
+	"21.172.in-addr.arpa.":  NewRR("$ORIGIN 21.172.in-addr.arpa.\n" + SOA),
+	"22.172.in-addr.arpa.":  NewRR("$ORIGIN 22.172.in-addr.arpa.\n" + SOA),
+	"23.172.in-addr.arpa.":  NewRR("$ORIGIN 23.172.in-addr.arpa.\n" + SOA),
+	"24.172.in-addr.arpa.":  NewRR("$ORIGIN 24.172.in-addr.arpa.\n" + SOA),
+	"25.172.in-addr.arpa.":  NewRR("$ORIGIN 25.172.in-addr.arpa.\n" + SOA),
+	"26.172.in-addr.arpa.":  NewRR("$ORIGIN 26.172.in-addr.arpa.\n" + SOA),
+	"27.172.in-addr.arpa.":  NewRR("$ORIGIN 27.172.in-addr.arpa.\n" + SOA),
+	"28.172.in-addr.arpa.":  NewRR("$ORIGIN 28.172.in-addr.arpa.\n" + SOA),
+	"29.172.in-addr.arpa.":  NewRR("$ORIGIN 29.172.in-addr.arpa.\n" + SOA),
+	"30.172.in-addr.arpa.":  NewRR("$ORIGIN 30.172.in-addr.arpa.\n" + SOA),
+	"31.172.in-addr.arpa.":  NewRR("$ORIGIN 31.172.in-addr.arpa.\n" + SOA),
+}
+
 func main() {
 	upstreamDNS := mustGetEnv("UPSTREAM_DNS_SERVER_IP")
-	localDNSPort := mustGetEnvInt("DNS_LISTEN_PORT")
+	upstreamResolver := &net.UDPAddr{Port: 53, IP: net.ParseIP(upstreamDNS)}
+	_ = upstreamResolver
+	localDNSPort := mustGetEnv("DNS_LISTEN_PORT")
 	env := mustGetEnv("ENV")
+
+	zapLog, _ := zap.NewProduction()
+	defer zapLog.Sync()
+	logger := zapLog.Sugar()
+
+	ts := time.Now()
+	c := new(dns.Client)
+	r, rtt, err := c.Exchange(&dns.Msg{
+		MsgHdr: dns.MsgHdr{
+			Id:                 66666,
+			Response:           false,
+			Opcode:             0,
+			Authoritative:      false,
+			Truncated:          false,
+			RecursionDesired:   false,
+			RecursionAvailable: false,
+			Zero:               false,
+			AuthenticatedData:  false,
+			CheckingDisabled:   false,
+			Rcode:              0,
+		},
+		Compress: false,
+		Question: nil,
+		Answer:   nil,
+		Ns:       nil,
+		Extra:    nil,
+	}, upstreamResolver.String())
+	logger.Debugw("exchange",
+		"ts",time.Since(ts),
+		"r",r,
+		"rtt",rtt,
+		"err"
+		)
 
 	ballast := make([]byte, 1<<20)
 	_ = ballast
 	if env == "dev" {
 		go func() {
-			for range time.Tick(time.Second) {
+			for range time.Tick(time.Second * 5) {
 				printMemUsage()
 			}
 		}()
 	}
 
-	// Fire up the UDP listener.
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: localDNSPort})
-	if err != nil {
-		log.Fatalf("could not listen on port 53 UDP: %v", err)
+	srv := dns.Server{
+		Addr:              ":" + localDNSPort,
+		Net:               "udp",
+		ReadTimeout:       3,
+		WriteTimeout:      5,
+		NotifyStartedFunc: func() { log.Println("Started DNS resolver.") },
+		MaxTCPQueries:     128,
+		ReusePort:         false,
+		DecorateReader: func(r dns.Reader) dns.Reader {
+			logger.Debugw("read", "reader", r)
+			return r
+		},
+		DecorateWriter: func(w dns.Writer) dns.Writer {
+			logger.Debugw("write", "writer", w)
+			return w
+		},
 	}
-	defer conn.Close()
 
-	// Load the blacklist
-	blacklist := NewRegistry([]string{
-		"ads.google.com",
-		"ad.google.com",
-		"facebook.com",
-		"microsoft.com",
-	})
-
-	// Keep track of all UDP messages
-	// that need to be reconciled.
-	respMap := NewResponseRegistry()
-
-	log.Println("Waiting for UDP connections...")
-	for {
-		buf := make([]byte, 576)
-		_, udpAddr, err := conn.ReadFromUDP(buf)
-		if err != nil {
-			log.Fatalf("could not read from UDP connection: %v", err)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatalf("could not start the DNS resolver: %v", err)
 		}
+	}()
 
-		// Unpack and validate the received message.
-		var m dnsmessage.Message
-		if err := m.Unpack(buf); err != nil {
-			log.Printf("could not unpack into dns message: %v", err)
-			continue
-		}
-
-		switch m.Header.Response {
-		case false:
-			// This a new request that hasn't been resolved.
-			// Check if it's in the blacklist
-			var isBlacklisted bool
-			for _, q := range m.Questions {
-				if blacklist.exists(q.Name.String()) {
-					isBlacklisted = true
-					break
-				}
-			}
-
-			if isBlacklisted {
-				log.Printf("Found in blacklist: %v", isBlacklisted)
-				// Replace contents of the DNS message.
-				m = block(m)
-
-				packed, err := m.Pack()
-				if err != nil {
-					log.Fatalf("could not pack dns message: %v", err)
-				}
-				if _, err := conn.WriteToUDP(packed, udpAddr); err != nil {
-					log.Fatalf("could not write to blacklisted UDP connection: %v", err)
-				}
-				continue
-			}
-
-			// This is an incoming DNS request that hasn't been "resolved".
-			// Pack back to bytes.
-			packed, err := m.Pack()
-			if err != nil {
-				log.Printf("could not pack dns message: %v", err)
-				continue
-			}
-
-			// Forward to upstream DNS.
-			resolver := &net.UDPAddr{Port: 53, IP: net.ParseIP(upstreamDNS)}
-			if _, err := conn.WriteToUDP(packed, resolver); err != nil {
-				log.Printf("could not write to upstream DNS UDP connection: %v", err)
-				continue
-			}
-			log.Printf("Forwarded to upstream DNS (%v): %v", resolver.String(), m.GoString())
-
-			// Keep track of the originator so we can respond back.
-			respMap.store(m.ID, udpAddr)
-
-		case true:
-			// Check if we have a request that needs reconciliation.
-			originator := respMap.retrieve(m.ID)
-			if originator == nil {
-				log.Printf("found dangling DNS message ID (%v): %v", m.ID, m.GoString())
-				// Improvement: we can call the cleanup service on the registry.
-				continue
-			}
-
-			// This is a response from an upstream DNS server.
-			// Make sure we respond to the initial requester.
-			if _, err := conn.WriteToUDP(buf, originator); err != nil {
-				log.Fatalf("could not write to original UDP connection (%v): %v", udpAddr.String(), err)
-			}
-
-			// If everything was OK, we can assume
-			// that the request was fulfilled and thus
-			// we can safely delete the ID from our registry.
-			respMap.remove(m.ID)
-
-			log.Printf("Responded to original requester (%v): %v", originator.String(), m.GoString())
-		}
-	}
-}
-
-func mustGetEnv(value string) string {
-	v := os.Getenv(value)
-	if v == "" {
-		log.Fatalf("could not retrieve needed value (%v) from the environment", value)
+	for z, rr := range zones {
+		rrx := rr.(*dns.SOA) // Needed to create the actual RR, and not an reference.
+		dns.HandleFunc(z, func(w dns.ResponseWriter, r *dns.Msg) {
+			logger.Debugw("received msg", "msg", r)
+			m := new(dns.Msg)
+			m.SetReply(r)
+			m.Authoritative = true
+			m.Ns = []dns.RR{rrx}
+			w.WriteMsg(m)
+		})
 	}
 
-	return v
-}
+	sig := make(chan os.Signal)
+	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	s := <-sig
 
-func mustGetEnvInt(value string) int {
-	v := os.Getenv(value)
-	if v == "" {
-		log.Fatalf("could not retrieve needed value (%v) from the environment", value)
+	if err := srv.Shutdown(); err != nil {
+		log.Fatalf("could not close the server in a clean way: %v", err)
 	}
-
-	i, err := strconv.Atoi(v)
-	if err != nil {
-		log.Fatalf("could not convert needed value (%v) from string to int: %v", value, err)
-	}
-
-	return i
-}
-
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
-}
-
-func printMemUsage() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("Alloc: %v MB", bToMb(m.Alloc))
-	fmt.Printf("\tTotalAlloc: %v MB", bToMb(m.TotalAlloc))
-	fmt.Printf("\tSys: %v MB", bToMb(m.Sys))
-	fmt.Printf("\tNumGC: %v", m.NumGC)
-	fmt.Printf("\tHeap: alloc (%v) | idle (%v) | in use (%v) | obj (%v) | released (%v)\n", bToMb(m.HeapAlloc), bToMb(m.HeapIdle), bToMb(m.HeapInuse), m.HeapObjects, bToMb(m.HeapReleased))
+	log.Fatalf("Stopped server, received (%v)", s)
 }
