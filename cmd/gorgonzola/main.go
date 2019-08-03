@@ -61,7 +61,8 @@ func main() {
 			buf := make([]byte, 576, 1024)
 			_, req, err := conn.ReadFromUDP(buf)
 			if err != nil {
-				log.Fatalf("could not read from UDP connection: %v", err)
+				logger.Errorf("could not read from UDP connection: %v", err)
+				continue
 			}
 
 			// Unpack and validate the received message.
@@ -70,13 +71,18 @@ func main() {
 				logger.Errorf("could not read message from (%v)", req.String())
 				continue
 			}
+			packedMsg, err := msg.Pack()
+			if err != nil {
+				logger.Errorf("could not pack dns message: %v", err)
+				continue
+			}
 
 			switch {
 			case msg.MsgHdr.Response == false:
 				// TODO: check if in blacklist
 
 				// Forward to upstream DNS.
-				if _, err := conn.WriteToUDP(buf, upstreamResolver); err != nil {
+				if _, err := conn.WriteToUDP(packedMsg, upstreamResolver); err != nil {
 					logger.Errorf("could not write to upstream DNS UDP connection: %v", err)
 					continue
 				}
@@ -96,8 +102,9 @@ func main() {
 				}
 
 				// Respond to the initial requester.
-				if _, err := conn.WriteToUDP(buf, originator); err != nil {
-					log.Fatalf("could not write to original UDP connection (%v): %v", originator.String(), err)
+				if _, err := conn.WriteToUDP(packedMsg, originator); err != nil {
+					logger.Errorf("could not write to original UDP connection (%v): %v", originator.String(), err)
+					continue
 				}
 
 				// If everything was OK, we can assume
