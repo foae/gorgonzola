@@ -8,129 +8,115 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 )
 
-// SOA is a string we will append everywhere in the zones values.
-const SOA string = "@ SOA prisoner.iana.org. hostmaster.root-servers.org. 2002040800 1800 900 0604800 604800"
-
-// NewRR is a shortcut to dns.NewRR that ignores the error.
-func NewRR(s string) dns.RR { r, _ := dns.NewRR(s); return r }
-
-var zones = map[string]dns.RR{
-	"10.in-addr.arpa.":      NewRR("$ORIGIN 10.in-addr.arpa.\n" + SOA),
-	"254.169.in-addr.arpa.": NewRR("$ORIGIN 254.169.in-addr.arpa.\n" + SOA),
-	"168.192.in-addr.arpa.": NewRR("$ORIGIN 168.192.in-addr.arpa.\n" + SOA),
-	"16.172.in-addr.arpa.":  NewRR("$ORIGIN 16.172.in-addr.arpa.\n" + SOA),
-	"17.172.in-addr.arpa.":  NewRR("$ORIGIN 17.172.in-addr.arpa.\n" + SOA),
-	"18.172.in-addr.arpa.":  NewRR("$ORIGIN 18.172.in-addr.arpa.\n" + SOA),
-	"19.172.in-addr.arpa.":  NewRR("$ORIGIN 19.172.in-addr.arpa.\n" + SOA),
-	"20.172.in-addr.arpa.":  NewRR("$ORIGIN 20.172.in-addr.arpa.\n" + SOA),
-	"21.172.in-addr.arpa.":  NewRR("$ORIGIN 21.172.in-addr.arpa.\n" + SOA),
-	"22.172.in-addr.arpa.":  NewRR("$ORIGIN 22.172.in-addr.arpa.\n" + SOA),
-	"23.172.in-addr.arpa.":  NewRR("$ORIGIN 23.172.in-addr.arpa.\n" + SOA),
-	"24.172.in-addr.arpa.":  NewRR("$ORIGIN 24.172.in-addr.arpa.\n" + SOA),
-	"25.172.in-addr.arpa.":  NewRR("$ORIGIN 25.172.in-addr.arpa.\n" + SOA),
-	"26.172.in-addr.arpa.":  NewRR("$ORIGIN 26.172.in-addr.arpa.\n" + SOA),
-	"27.172.in-addr.arpa.":  NewRR("$ORIGIN 27.172.in-addr.arpa.\n" + SOA),
-	"28.172.in-addr.arpa.":  NewRR("$ORIGIN 28.172.in-addr.arpa.\n" + SOA),
-	"29.172.in-addr.arpa.":  NewRR("$ORIGIN 29.172.in-addr.arpa.\n" + SOA),
-	"30.172.in-addr.arpa.":  NewRR("$ORIGIN 30.172.in-addr.arpa.\n" + SOA),
-	"31.172.in-addr.arpa.":  NewRR("$ORIGIN 31.172.in-addr.arpa.\n" + SOA),
-}
-
 func main() {
+	/*
+		ENV vars
+	*/
 	upstreamDNS := mustGetEnv("UPSTREAM_DNS_SERVER_IP")
-	upstreamResolver := &net.UDPAddr{Port: 53, IP: net.ParseIP(upstreamDNS)}
-	_ = upstreamResolver
-	localDNSPort := mustGetEnv("DNS_LISTEN_PORT")
+	localDNSPort := mustGetEnvInt("DNS_LISTEN_PORT")
 	env := mustGetEnv("ENV")
 
-	zapLog, _ := zap.NewProduction()
+	/*
+		Setup
+	*/
+	// Keep track of all UDP messages
+	// that need to be reconciled.
+	responseRegistry := NewResponseRegistry()
+	upstreamResolver := &net.UDPAddr{Port: 53, IP: net.ParseIP(upstreamDNS)}
+
+	/*
+		Logging
+	*/
+	var zapLog *zap.Logger
+	zapLog, err := zap.NewProduction()
+	if err != nil {
+		log.Fatalf("could not init zap: %v", err)
+	}
+	if env == "dev" {
+		zapLog, err = zap.NewDevelopment()
+		if err != nil {
+			log.Fatalf("could not init zap: %v", err)
+		}
+	}
 	defer zapLog.Sync()
 	logger := zapLog.Sugar()
 
-	ts := time.Now()
-	c := new(dns.Client)
-	r, rtt, err := c.Exchange(&dns.Msg{
-		MsgHdr: dns.MsgHdr{
-			Id:                 66666,
-			Response:           false,
-			Opcode:             0,
-			Authoritative:      false,
-			Truncated:          false,
-			RecursionDesired:   false,
-			RecursionAvailable: false,
-			Zero:               false,
-			AuthenticatedData:  false,
-			CheckingDisabled:   false,
-			Rcode:              0,
-		},
-		Compress: false,
-		Question: nil,
-		Answer:   nil,
-		Ns:       nil,
-		Extra:    nil,
-	}, upstreamResolver.String())
-	logger.Debugw("exchange",
-		"ts",time.Since(ts),
-		"r",r,
-		"rtt",rtt,
-		"err"
-		)
-
-	ballast := make([]byte, 1<<20)
-	_ = ballast
-	if env == "dev" {
-		go func() {
-			for range time.Tick(time.Second * 5) {
-				printMemUsage()
-			}
-		}()
+	/*
+		Fire up the UDP listener.
+	*/
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: localDNSPort})
+	if err != nil {
+		log.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
 	}
+	defer conn.Close()
 
-	srv := dns.Server{
-		Addr:              ":" + localDNSPort,
-		Net:               "udp",
-		ReadTimeout:       3,
-		WriteTimeout:      5,
-		NotifyStartedFunc: func() { log.Println("Started DNS resolver.") },
-		MaxTCPQueries:     128,
-		ReusePort:         false,
-		DecorateReader: func(r dns.Reader) dns.Reader {
-			logger.Debugw("read", "reader", r)
-			return r
-		},
-		DecorateWriter: func(w dns.Writer) dns.Writer {
-			logger.Debugw("write", "writer", w)
-			return w
-		},
-	}
-
+	/*
+		Process UDP messages.
+	*/
 	go func() {
-		if err := srv.ListenAndServe(); err != nil {
-			log.Fatalf("could not start the DNS resolver: %v", err)
+		logger.Debugf("Waiting for messages via UDP on port (%v)...", localDNSPort)
+		for {
+			buf := make([]byte, 576, 1024)
+			_, req, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				log.Fatalf("could not read from UDP connection: %v", err)
+			}
+
+			// Unpack and validate the received message.
+			var msg dns.Msg
+			if err := msg.Unpack(buf); err != nil {
+				logger.Errorf("could not read message from (%v)", req.String())
+				continue
+			}
+
+			switch {
+			case msg.MsgHdr.Response == false:
+				// TODO: check if in blacklist
+
+				// Forward to upstream DNS.
+				if _, err := conn.WriteToUDP(buf, upstreamResolver); err != nil {
+					logger.Errorf("could not write to upstream DNS UDP connection: %v", err)
+					continue
+				}
+
+				// Keep track of the originator
+				// so that we can respond back.
+				responseRegistry.store(msg.Id, req)
+				logger.Debugf("Forwarded to upstream DNS (%v): %v", upstreamResolver.String(), msg.Question)
+
+			case msg.MsgHdr.Response:
+				// This is a response.
+				// Check if we have a request that needs reconciliation.
+				originator := responseRegistry.retrieve(msg.Id)
+				if originator == nil {
+					logger.Errorf("found dangling DNS message ID (%v): %v", msg.Id, msg.Question)
+					continue
+				}
+
+				// Respond to the initial requester.
+				if _, err := conn.WriteToUDP(buf, originator); err != nil {
+					log.Fatalf("could not write to original UDP connection (%v): %v", originator.String(), err)
+				}
+
+				// If everything was OK, we can assume
+				// that the request was fulfilled and thus
+				// we can safely delete the ID from our registry.
+				responseRegistry.remove(msg.Id)
+				logger.Debugf("Responded to original requester (%v): %v", originator.String(), msg.Question)
+			default:
+				logger.Warnw("received alien message",
+					"from", req.String(),
+					"for", msg.Question,
+					"fullMsg", msg,
+				)
+			}
 		}
 	}()
 
-	for z, rr := range zones {
-		rrx := rr.(*dns.SOA) // Needed to create the actual RR, and not an reference.
-		dns.HandleFunc(z, func(w dns.ResponseWriter, r *dns.Msg) {
-			logger.Debugw("received msg", "msg", r)
-			m := new(dns.Msg)
-			m.SetReply(r)
-			m.Authoritative = true
-			m.Ns = []dns.RR{rrx}
-			w.WriteMsg(m)
-		})
-	}
-
+	logger.Debugf("Started UDP resolver on port (%v)", localDNSPort)
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	s := <-sig
-
-	if err := srv.Shutdown(); err != nil {
-		log.Fatalf("could not close the server in a clean way: %v", err)
-	}
-	log.Fatalf("Stopped server, received (%v)", s)
+	log.Fatalf("Stopped server, received signal (%v)", <-sig)
 }

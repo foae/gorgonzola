@@ -14,7 +14,7 @@ test:
 
 run: install_gorgonzola
 	HTTP_LISTEN_ADDR="127.0.0.1:8000" \
-	DNS_LISTEN_PORT="53000" \
+	DNS_LISTEN_PORT="53" \
 	UPSTREAM_DNS_SERVER_IP="1.1.1.1" \
 	ENV="dev" \
 	$(GOPATH)/bin/gorgonzola
