@@ -1,0 +1,7 @@
+* text=auto
+
+vendor/* -diff
+cover.out -diff
+cover.out.tmp -diff
+go.mod -diff
+go.sum -diff
