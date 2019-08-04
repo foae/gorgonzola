@@ -4,13 +4,17 @@ install_gorgonzola:
 	go install github.com/foae/gorgonzola/cmd/gorgonzola
 
 lint:
-	find . -path '*/vendor/*' -prune -o -name '*.go' -type f -exec gofmt -s -w {} \;
-	which gometalinter; if [ $$? -ne 0 ]; then go get -u github.com/alecthomas/gometalinter && gometalinter --install; fi
-	gometalinter --vendor --exclude=repos --disable-all --enable=golint ./...
+	which golangci-lint; if [ $$? -ne 0 ]; then go get -u github.com/golangci/golangci-lint; fi
+	golangci-lint run ./... --disable-all -E errcheck -E bodyclose -E govet -E varcheck -E ineffassign -E gosec -E unconvert -E goconst -E gocyclo -E gofmt -E maligned -E prealloc
 	go vet ./...
 
 test:
 	go test -v -short -cover ./...
+
+test-coverage:
+	go test ./... -coverpkg=./... -coverprofile cover.out.tmp && \
+	cat cover.out.tmp | grep -v "mock.go" | grep -v "generated.go" | grep -v "_gen.go" > cover.out && \
+    go tool cover -func cover.out
 
 run: install_gorgonzola
 	HTTP_LISTEN_ADDR="127.0.0.1:8000" \

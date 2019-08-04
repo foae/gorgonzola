@@ -54,7 +54,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer logger.Sync()
+	defer logger.Sync() // nolint
 
 	/*
 		Fire up the UDP listener.
