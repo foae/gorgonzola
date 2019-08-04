@@ -4,16 +4,16 @@ import (
 	"sync"
 )
 
-// Registry defines the structure of an response registry.
-type Registry struct {
+// Blocklist defines the structure of an response registry.
+type Blocklist struct {
 	m map[string]int64
 	l *sync.RWMutex
 }
 
-// NewRegistry returns a new registry reference with
+// NewBlocklist returns a new registry reference with
 // all the items loaded from a given list.
-func NewRegistry(list []string) *Registry {
-	w := &Registry{
+func NewBlocklist(list []string) *Blocklist {
+	w := &Blocklist{
 		l: &sync.RWMutex{},
 		m: make(map[string]int64),
 	}
@@ -27,38 +27,38 @@ func NewRegistry(list []string) *Registry {
 	return w
 }
 
-func (wr Registry) exists(domain string) bool {
-	wr.l.RLock()
-	_, found := wr.m[domain]
-	wr.l.RUnlock()
+func (b Blocklist) exists(domain string) bool {
+	b.l.RLock()
+	_, found := b.m[domain]
+	b.l.RUnlock()
 
 	return found
 }
 
-func (wr Registry) load(list []string) {
-	wr.l.Lock()
+func (b Blocklist) load(list []string) {
+	b.l.Lock()
 	for _, d := range list {
-		wr.m[d]++
+		b.m[d]++
 	}
-	wr.l.Unlock()
+	b.l.Unlock()
 }
 
-func (wr Registry) store(domain string) {
-	wr.l.Lock()
-	wr.m[domain]++
-	wr.l.Unlock()
+func (b Blocklist) store(domain string) {
+	b.l.Lock()
+	b.m[domain]++
+	b.l.Unlock()
 }
 
-func (wr Registry) retrieve(domain string) int64 {
-	wr.l.RLock()
-	f := wr.m[domain]
-	wr.l.RUnlock()
+func (b Blocklist) retrieve(domain string) int64 {
+	b.l.RLock()
+	f := b.m[domain]
+	b.l.RUnlock()
 
 	return f
 }
 
-func (wr Registry) remove(domain string) {
-	wr.l.Lock()
-	delete(wr.m, domain)
-	wr.l.Unlock()
+func (b Blocklist) remove(domain string) {
+	b.l.Lock()
+	delete(b.m, domain)
+	b.l.Unlock()
 }
