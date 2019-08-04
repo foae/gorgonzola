@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	handler2 "github.com/foae/gorgonzola/handler"
+	"github.com/gin-gonic/gin"
 	"log"
 	"net"
 	"net/http"
@@ -39,6 +41,13 @@ func main() {
 		"facebook.com.",
 		"microsoft.com.",
 	})
+	switch env {
+	case "dev":
+		gin.SetMode(gin.DebugMode)
+	default:
+		gin.SetMode(gin.ReleaseMode)
+	}
+	router := gin.Default()
 
 	/*
 		Logging
@@ -64,7 +73,7 @@ func main() {
 		log.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
 	}
 	logger.Infof("Started UDP resolver on port (%v)", localDNSPort)
-	defer conn.Close()
+	defer conn.Close() //nolint
 
 	/*
 		Process UDP messages.
@@ -156,6 +165,9 @@ func main() {
 		}
 	}(cctx)
 
+	/*
+		HTTP server setup.
+	*/
 	srv := http.Server{
 		Addr:              localHTTPPort,
 		ReadTimeout:       time.Second * 5,
@@ -163,8 +175,8 @@ func main() {
 		WriteTimeout:      time.Second * 5,
 		IdleTimeout:       time.Second * 5,
 		MaxHeaderBytes:    1024,
+		Handler:           router,
 	}
-
 	go func() {
 		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
 		err := srv.ListenAndServe()
@@ -172,6 +184,12 @@ func main() {
 			logger.Fatalf("the http server encountered an error: %v", err)
 		}
 	}()
+
+	/*
+		HTTP routes attachment.
+	*/
+	handler := handler2.New(handler2.Config{Logger: logger})
+	router.POST("/blocklist", handler.AddToBlocklist)
 
 	logger.Infof("Running pod. Hostname: %v | Go: %v", hostname, runtime.Version())
 	sig := make(chan os.Signal)
