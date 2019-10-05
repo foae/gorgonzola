@@ -12,7 +12,6 @@ require (
 	github.com/json-iterator/go v1.1.7 // indirect
 	github.com/mattn/go-isatty v0.0.9 // indirect
 	github.com/miekg/dns v1.1.17
-	github.com/spf13/pflag v1.0.5 // indirect
 	github.com/ugorji/go v1.1.7 // indirect
 	go.uber.org/atomic v1.4.0 // indirect
 	go.uber.org/multierr v1.1.0 // indirect
