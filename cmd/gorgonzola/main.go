@@ -3,8 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	handler2 "github.com/foae/gorgonzola/handler"
-	"github.com/gin-gonic/gin"
 	"log"
 	"net"
 	"net/http"
@@ -13,6 +11,9 @@ import (
 	"runtime"
 	"syscall"
 	"time"
+
+	handler2 "github.com/foae/gorgonzola/handler"
+	"github.com/gin-gonic/gin"
 
 	"github.com/miekg/dns"
 	"go.uber.org/zap"
@@ -86,7 +87,9 @@ func main() {
 			select {
 			case <-ctx.Done():
 				logger.Info("Closed background UDP listener.")
-				_ = conn.Close()
+				if err := conn.Close(); err != nil {
+					logger.Errorf("could not close conn: %v", err)
+				}
 				return
 			default:
 				buf := make([]byte, 576, 1024)
@@ -191,14 +194,18 @@ func main() {
 	handler := handler2.New(handler2.Config{Logger: logger})
 	router.POST("/blocklist", handler.AddToBlocklist)
 
-	logger.Infof("Running pod. Hostname: %v | Go: %v", hostname, runtime.Version())
+	ips, err := getIPAddr()
+	if err != nil {
+		logger.Fatalf("could not read the IPv4 address: %v", err)
+	}
+	logger.Infof("Running instance: hostname: %v | Go: %v | IPv4: %v", hostname, runtime.Version(), ips[0])
+
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	logger.Infof("Stopping servers, received shutdown signal: %v", <-sig)
 	if err := srv.Shutdown(cctx); err != nil {
 		log.Fatalf("missed shutting down the http server gracefully: %v", err)
 	}
-	time.Sleep(time.Second)
 }
 
 func packMsgAndSend(msg dns.Msg, conn *net.UDPConn, req *net.UDPAddr, logger *zap.SugaredLogger) error {
@@ -212,4 +219,38 @@ func packMsgAndSend(msg dns.Msg, conn *net.UDPConn, req *net.UDPAddr, logger *za
 	}
 
 	return nil
+}
+
+func getIPAddr() ([]string, error) {
+	found := make([]string, 0)
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range ifaces {
+		addrs, err := i.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			if ip != nil && !ip.IsLoopback() && ip.To4() != nil {
+				found = append(found, ip.String())
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		return nil, fmt.Errorf("no valid IPv4 addresses found")
+	}
+
+	return found, nil
 }
