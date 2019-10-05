@@ -1,4 +1,4 @@
-package handler
+package http
 
 import (
 	"encoding/json"
@@ -6,6 +6,10 @@ import (
 	"net/http"
 	"net/url"
 )
+
+func (h *Handler) Health(g *gin.Context) {
+	g.String(http.StatusOK, "OK")
+}
 
 // AddToBlocklist defines an action at the handler.
 func (h *Handler) AddToBlocklist(g *gin.Context) {

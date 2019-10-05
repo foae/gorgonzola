@@ -6,6 +6,7 @@ import (
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"log"
+	"net"
 	"os"
 	"runtime"
 	"strconv"
@@ -90,4 +91,38 @@ func newDevelopmentLogger() (*zap.SugaredLogger, error) {
 
 func devLogTimeEncoder(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
 	enc.AppendString("\x1b[90m" + t.Format(time.RFC3339) + "\x1b[0m")
+}
+
+func getIPAddr() ([]string, error) {
+	found := make([]string, 0)
+
+	ifaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+	for _, i := range ifaces {
+		addrs, err := i.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			if ip != nil && !ip.IsLoopback() && ip.To4() != nil {
+				found = append(found, ip.String())
+			}
+		}
+	}
+
+	if len(found) == 0 {
+		return nil, fmt.Errorf("no valid IPv4 addresses found")
+	}
+
+	return found, nil
 }
