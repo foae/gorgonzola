@@ -97,29 +97,9 @@ func main() {
 	defer cancel()
 	go func() {
 		logger.Infof("Waiting for messages via UDP on port (%v)...", localDNSPort)
-		for {
-			select {
-			case <-cctx.Done():
-				if err := conn.Close(); err != nil {
-					logger.Errorf("could not close conn: %v", err)
-				}
-				logger.Info("Closed background UDP listener.")
-				return
-			default:
-				if err := dnsHandler.Handle(cctx, conn, domainBlocklist, responseRegistry, upstreamResolver, logger); err != nil {
-					e, ok := err.(*dnsHandler.Err)
-					switch {
-					case !ok, e.IsFatal():
-						logger.Errorf("fatal error in worker: %v", err)
-						return
-					case ok, e.IsFatal() == false:
-						logger.Errorf("non fatal error in worker: %v", e)
-						continue
-					default:
-						return
-					}
-				}
-			}
+		if err := dnsHandler.Handle(cctx, conn, domainBlocklist, responseRegistry, upstreamResolver, logger); err != nil {
+			logger.Errorf("error in worker: %v", err)
+			return
 		}
 	}()
 
@@ -131,25 +111,19 @@ func main() {
 	router.GET("/health", handler.Health)
 
 	srv := http.Server{
-		Addr:              localHTTPPort,
-		Handler:           router,
-		ReadTimeout:       8,
-		ReadHeaderTimeout: 8,
-		WriteTimeout:      8,
-		IdleTimeout:       16,
-		MaxHeaderBytes:    1024,
+		Addr:           localHTTPPort,
+		Handler:        router,
+		MaxHeaderBytes: 1024,
 	}
-	defer srv.Close()
 	go func() {
+		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
 		err := srv.ListenAndServe()
 		switch {
 		case err == http.ErrServerClosed:
-			log.Printf("http listener closed: %v", err)
+			logger.Infof("http listener closed: %v", err)
 		case err != nil:
-			log.Fatalf("http listener error: %v", err)
-
+			logger.Fatalf("http listener error: %v", err)
 		}
-		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
 	}()
 
 	ips, err := getIPAddr()
