@@ -7,6 +7,7 @@ import (
 	"github.com/foae/gorgonzola/handler/dns"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
@@ -128,11 +129,27 @@ func main() {
 	handler := httpHandler.New(httpHandler.Config{Logger: logger})
 	router.POST("/blocklist", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
+
+	srv := http.Server{
+		Addr:              localHTTPPort,
+		Handler:           router,
+		ReadTimeout:       8,
+		ReadHeaderTimeout: 8,
+		WriteTimeout:      8,
+		IdleTimeout:       16,
+		MaxHeaderBytes:    1024,
+	}
+	defer srv.Close()
 	go func() {
-		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
-		if err := router.Run(localHTTPPort); err != nil {
-			logger.Fatalf("http server encountered an error: %v", err)
+		err := srv.ListenAndServe()
+		switch {
+		case err == http.ErrServerClosed:
+			log.Printf("http listener closed: %v", err)
+		case err != nil:
+			log.Fatalf("http listener error: %v", err)
+
 		}
+		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
 	}()
 
 	ips, err := getIPAddr()
@@ -144,6 +161,11 @@ func main() {
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	logger.Infof("Stopping servers, received shutdown signal: %v", <-sig)
+
+	if err := srv.Shutdown(cctx); err != nil {
+		log.Fatalf("error in http server: %v", err)
+	}
+
 	cancel()
-	time.Sleep(time.Second * 1)
+	time.Sleep(time.Second * 3)
 }
