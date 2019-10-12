@@ -2,7 +2,9 @@ package dns
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
+	"github.com/dgraph-io/badger"
 	"github.com/miekg/dns"
 	"net"
 )
@@ -19,7 +21,7 @@ func (c *Conn) ListenAndServe(
 			if err := c.Close(); err != nil {
 				c.logger.Errorf("could not close conn: %v", err)
 			}
-			
+
 			c.logger.Info("dns: closed background UDP listener.")
 			return nil
 		default:
@@ -30,13 +32,15 @@ func (c *Conn) ListenAndServe(
 			buf := make([]byte, 576, 1024)
 			_, req, err := c.udpConn.ReadFromUDP(buf)
 			if err != nil {
-				return errFatal("dns: could not read from UDP connection: %v", err)
+				c.logger.Errorf("dns: could not read from UDP connection: %v", err)
+				continue
 			}
 
 			// Unpack and validate the received message.
 			var msg dns.Msg
 			if err := msg.Unpack(buf); err != nil {
-				return errRec("dns: could not read message from (%v)", req.String())
+				c.logger.Errorf("dns: could not read message from (%v)", req.String())
+				continue
 			}
 
 			switch {
@@ -66,8 +70,23 @@ func (c *Conn) ListenAndServe(
 				// Keep track of the originalReq
 				// so that we can respond back.
 				responseRegistry.store(msg.Id, req)
-				c.logger.Debugf("Forwarded msg (%v) to upstream DNS (%v): %v", msg.Id, c.upstreamResolver.String(), msg.Question)
+				// Add to badger too.
+				if err := c.db.Update(func(txn *badger.Txn) error {
+					key := make([]byte, binary.MaxVarintLen16)
+					binary.BigEndian.PutUint16(key, msg.Id)
 
+					val, err := fromUDPAddr(req).Pack()
+					if err != nil {
+						return fmt.Errorf("could not pack addr: %v", err)
+					}
+
+					return txn.Set(key, val)
+				}); err != nil {
+					c.logger.Errorf("could not write msg (%v) to txn: %v", msg.Id, err)
+					continue
+				}
+
+				c.logger.Debugf("Forwarded msg (%v) to upstream DNS (%v): %v", msg.Id, c.upstreamResolver.String(), msg.Question)
 			case msg.MsgHdr.Response:
 				// This is a response.
 				// Check if we have a request that needs reconciliation.
@@ -75,6 +94,27 @@ func (c *Conn) ListenAndServe(
 				if originalReq == nil {
 					c.logger.Errorf("dns: found dangling DNS msg (%v): %v", msg.Id, msg.Question)
 					continue
+				}
+
+				originalReqFromBadger := make([]byte, 0)
+				if err := c.db.View(func(txn *badger.Txn) error {
+					key := make([]byte, binary.MaxVarintLen16)
+					binary.BigEndian.PutUint16(key, msg.Id)
+					item, err := txn.Get(key)
+					if err != nil {
+						return err
+					}
+
+					_, errr := item.ValueCopy(originalReqFromBadger)
+					return errr
+				}); err != nil {
+					c.logger.Errorf("msg (%v) not found in db: %v", msg.Id, err)
+				} else {
+					a := new(Addr)
+					if err := a.Unpack(originalReqFromBadger); err != nil {
+						c.logger.Debugf("err: %v", err)
+					}
+					c.logger.Debugf("msg (%v) found addr in db: %v", msg.Id, a)
 				}
 
 				// Respond to the initial requester.

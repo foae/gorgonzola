@@ -113,22 +113,14 @@ func main() {
 	*/
 	handler := httpHandler.New(httpHandler.Config{
 		Logger: logger,
+		DB:     db,
 	})
 	router.POST("/blocklist", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
 
-	srv := http.Server{
-		Addr:              localHTTPPort,
-		Handler:           router,
-		ReadTimeout:       8,
-		ReadHeaderTimeout: 8,
-		WriteTimeout:      8,
-		IdleTimeout:       32,
-		MaxHeaderBytes:    1024,
-	}
 	go func() {
 		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
-		err := srv.ListenAndServe()
+		err := router.Run(localHTTPPort)
 		switch {
 		case err == http.ErrServerClosed:
 			logger.Infof("http listener closed: %v", err)
@@ -147,10 +139,6 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	logger.Infof("Stopping servers, received shutdown signal: %v", <-sig)
 
-	if err := srv.Shutdown(cctx); err != nil {
-		log.Fatalf("error in http server: %v", err)
-	}
-
 	cancel()
-	time.Sleep(time.Second * 3)
+	time.Sleep(time.Second * 2)
 }

@@ -3,7 +3,6 @@ package dns
 import (
 	"fmt"
 	"github.com/dgraph-io/badger"
-	"github.com/pkg/errors"
 	"go.uber.org/zap"
 	"log"
 	"net"
@@ -39,16 +38,25 @@ func NewUDPConn(localDNSPort int, upstreamResolver *net.UDPAddr) (*Conn, error) 
 }
 
 func (c *Conn) Close() error {
-	var err error
+	var errs []error
 	if err := c.udpConn.Close(); err != nil {
-		err = errors.WithMessage(err, "dns: err closing UDP conn")
+		errs = append(errs, fmt.Errorf("dns: err closing UDP conn: %v", err))
 	}
 
 	if err := c.logger.Sync(); err != nil {
-		err = errors.WithMessage(err, "dns: dns: err closing logger")
+		errs = append(errs, fmt.Errorf("dns: err closing logger: %v", err))
 	}
 
-	return err
+	if err := c.db.Close(); err != nil {
+		errs = append(errs, fmt.Errorf("dns: err closing db: %v", err))
+	}
+
+	var e error
+	for _, err := range errs {
+		e = fmt.Errorf("%v; ", err)
+	}
+
+	return e
 }
 
 func (c *Conn) WithConfig(cfg Config) {
