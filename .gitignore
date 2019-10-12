@@ -1,4 +1,3 @@
-
 # Created by https://www.gitignore.io/api/go,macos,linux,windows,intellij,sublimetext,visualstudiocode,openframeworks+visualstudio
 # Edit at https://www.gitignore.io/?templates=go,macos,linux,windows,intellij,sublimetext,visualstudiocode,openframeworks+visualstudio
 
@@ -9,6 +8,7 @@
 *.dll
 *.so
 *.dylib
+repository/tmp/*
 
 # Test binary, built with `go test -c`
 *.test
