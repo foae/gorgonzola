@@ -14,7 +14,6 @@ import (
 	"syscall"
 	"time"
 
-	dnsHandler "github.com/foae/gorgonzola/handler/dns"
 	httpHandler "github.com/foae/gorgonzola/handler/http"
 	"github.com/gin-gonic/gin"
 
@@ -31,7 +30,7 @@ func main() {
 	env := mustGetEnv("ENV")
 
 	/*
-		Setup
+		Setup data layer
 	*/
 	dbFile := "./repository/tmp/badger"
 	db, err := badger.Open(badger.LSMOnlyOptions(dbFile))
@@ -57,6 +56,9 @@ func main() {
 	// that need to be reconciled.
 	responseRegistry := dns.NewResponseRegistry()
 
+	/*
+		HTTP Router
+	*/
 	switch env {
 	case "dev":
 		gin.SetMode(gin.DebugMode)
@@ -76,19 +78,22 @@ func main() {
 		logger, err = newProductionLogger()
 	}
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("could not init logger: %v", err)
 	}
 	defer logger.Sync() // nolint
 
 	/*
 		Fire up the UDP listener.
 	*/
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: localDNSPort})
+	conn, err := dns.NewUDPConn(localDNSPort, upstreamResolver)
 	if err != nil {
 		log.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
 	}
-	logger.Infof("Started UDP resolver on port (%v)", localDNSPort)
-	defer conn.Close() // nolint
+	conn.WithConfig(dns.Config{
+		DB:     db,
+		Logger: logger,
+	})
+	defer conn.Close()
 
 	/*
 		Process UDP messages.
@@ -97,7 +102,7 @@ func main() {
 	defer cancel()
 	go func() {
 		logger.Infof("Waiting for messages via UDP on port (%v)...", localDNSPort)
-		if err := dnsHandler.Handle(cctx, conn, domainBlocklist, responseRegistry, upstreamResolver, logger); err != nil {
+		if err := conn.ListenAndServe(cctx, domainBlocklist, responseRegistry); err != nil {
 			logger.Errorf("error in worker: %v", err)
 			return
 		}
@@ -106,14 +111,20 @@ func main() {
 	/*
 		HTTP routes attachment.
 	*/
-	handler := httpHandler.New(httpHandler.Config{Logger: logger})
+	handler := httpHandler.New(httpHandler.Config{
+		Logger: logger,
+	})
 	router.POST("/blocklist", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
 
 	srv := http.Server{
-		Addr:           localHTTPPort,
-		Handler:        router,
-		MaxHeaderBytes: 1024,
+		Addr:              localHTTPPort,
+		Handler:           router,
+		ReadTimeout:       8,
+		ReadHeaderTimeout: 8,
+		WriteTimeout:      8,
+		IdleTimeout:       32,
+		MaxHeaderBytes:    1024,
 	}
 	go func() {
 		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
@@ -130,7 +141,7 @@ func main() {
 	if err != nil {
 		logger.Fatalf("could not read the IPv4 address: %v", err)
 	}
-	logger.Infof("Running instance: hostname: %v | Go: %v | IPv4: %v", hostname, runtime.Version(), ips[0])
+	logger.Infof("Running instance. Hostname: %v | Go: %v | IPv4: %v", hostname, runtime.Version(), ips[0])
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
