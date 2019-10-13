@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/dgraph-io/badger"
 	"github.com/foae/gorgonzola/handler/dns"
+	"github.com/foae/gorgonzola/repository"
 	"log"
 	"net"
 	"net/http"
@@ -28,16 +28,6 @@ func main() {
 	localDNSPort := mustGetEnvInt("DNS_LISTEN_PORT")
 	localHTTPPort := mustGetEnv("HTTP_LISTEN_ADDR")
 	env := mustGetEnv("ENV")
-
-	/*
-		Setup data layer
-	*/
-	dbFile := "./repository/tmp/badger"
-	db, err := badger.Open(badger.LSMOnlyOptions(dbFile))
-	if err != nil {
-		log.Fatalf("could not open db file in (%v): %v", dbFile, err)
-	}
-	defer db.Close()
 
 	ctx := context.Background()
 	hostname, err := os.Hostname()
@@ -83,6 +73,15 @@ func main() {
 	defer logger.Sync() // nolint
 
 	/*
+		Setup data layer
+	*/
+	db, err := repository.NewRepo(repository.Config{Logger: logger})
+	if err != nil {
+		log.Fatalf("could not init DB repo: %v", err)
+	}
+	defer db.Close() // nolint
+
+	/*
 		Fire up the UDP listener.
 	*/
 	conn, err := dns.NewUDPConn(localDNSPort, upstreamResolver)
@@ -93,7 +92,7 @@ func main() {
 		DB:     db,
 		Logger: logger,
 	})
-	defer conn.Close()
+	defer conn.Close() // nolint
 
 	/*
 		Process UDP messages.

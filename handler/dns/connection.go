@@ -2,7 +2,7 @@ package dns
 
 import (
 	"fmt"
-	"github.com/dgraph-io/badger"
+	"github.com/foae/gorgonzola/repository"
 	"go.uber.org/zap"
 	"log"
 	"net"
@@ -11,14 +11,14 @@ import (
 
 type Conn struct {
 	udpConn          *net.UDPConn
-	db               *badger.DB
+	db               repository.Interactor
 	logger           *zap.SugaredLogger
 	m                *sync.RWMutex
 	upstreamResolver *net.UDPAddr
 }
 
 type Config struct {
-	DB               *badger.DB
+	DB               repository.Interactor
 	Logger           *zap.SugaredLogger
 	UpstreamResolver *net.UDPAddr
 }

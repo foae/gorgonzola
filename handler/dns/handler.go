@@ -2,9 +2,8 @@ package dns
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
-	"github.com/dgraph-io/badger"
+	"github.com/foae/gorgonzola/repository"
 	"github.com/miekg/dns"
 	"net"
 )
@@ -43,15 +42,14 @@ func (c *Conn) ListenAndServe(
 				continue
 			}
 
-			switch {
-			case msg.MsgHdr.Response == false:
+			switch msg.MsgHdr.Response {
+			case false:
+				c.logger.Infof("Query for (%v) from (%v)", msg.Question[0].Name, req.IP.String())
+
 				// Check if in domainBlocklist.
 				if len(msg.Question) > 0 {
 					if domainBlocklist.exists(msg.Question[0].Name) {
-						msg.MsgHdr.Response = true
-						msg.MsgHdr.Opcode = dns.RcodeNameError
-						msg.MsgHdr.Authoritative = true
-						msg.Answer = make([]dns.RR, 0)
+						msg = block(msg)
 						if err := c.packMsgAndSend(msg, req); err != nil {
 							return errRec("dns: could not pack and send: %v", err)
 						}
@@ -70,51 +68,23 @@ func (c *Conn) ListenAndServe(
 				// Keep track of the originalReq
 				// so that we can respond back.
 				responseRegistry.store(msg.Id, req)
-				// Add to badger too.
-				if err := c.db.Update(func(txn *badger.Txn) error {
-					key := make([]byte, binary.MaxVarintLen16)
-					binary.BigEndian.PutUint16(key, msg.Id)
 
-					val, err := fromUDPAddr(req).Pack()
-					if err != nil {
-						return fmt.Errorf("could not pack addr: %v", err)
-					}
-
-					return txn.Set(key, val)
-				}); err != nil {
-					c.logger.Errorf("could not write msg (%v) to txn: %v", msg.Id, err)
-					continue
+				q := repository.NewQuery(*req, msg)
+				if err := c.db.Create(q); err != nil {
+					c.logger.Errorf("could not create query entry: %v", err)
 				}
 
 				c.logger.Debugf("Forwarded msg (%v) to upstream DNS (%v): %v", msg.Id, c.upstreamResolver.String(), msg.Question)
-			case msg.MsgHdr.Response:
+
+			case true:
+				c.logger.Infof("Query response for (%v) from (%v)", msg.Question[0].Name, req.IP.String())
+
 				// This is a response.
 				// Check if we have a request that needs reconciliation.
 				originalReq := responseRegistry.retrieve(msg.Id)
 				if originalReq == nil {
 					c.logger.Errorf("dns: found dangling DNS msg (%v): %v", msg.Id, msg.Question)
 					continue
-				}
-
-				originalReqFromBadger := make([]byte, 0)
-				if err := c.db.View(func(txn *badger.Txn) error {
-					key := make([]byte, binary.MaxVarintLen16)
-					binary.BigEndian.PutUint16(key, msg.Id)
-					item, err := txn.Get(key)
-					if err != nil {
-						return err
-					}
-
-					_, errr := item.ValueCopy(originalReqFromBadger)
-					return errr
-				}); err != nil {
-					c.logger.Errorf("msg (%v) not found in db: %v", msg.Id, err)
-				} else {
-					a := new(Addr)
-					if err := a.Unpack(originalReqFromBadger); err != nil {
-						c.logger.Debugf("err: %v", err)
-					}
-					c.logger.Debugf("msg (%v) found addr in db: %v", msg.Id, a)
 				}
 
 				// Respond to the initial requester.
@@ -128,11 +98,11 @@ func (c *Conn) ListenAndServe(
 				// we can safely delete the ID from our registry.
 				responseRegistry.remove(msg.Id)
 				c.logger.Debugf("Responded to original requester (%v) for msg (%v): %v", originalReq.String(), msg.Id, msg.Question)
-			default:
-				c.logger.Warnw("dns: received alien message",
-					"from", req.String(),
-					"fullMsg", msg,
-				)
+
+				_, err := c.db.Read(msg.Id)
+				if err != nil {
+					c.logger.Errorf("could not read query entry (%v): %v", msg.Id, err)
+				}
 			}
 		}
 	}
@@ -150,4 +120,14 @@ func (c *Conn) packMsgAndSend(msg dns.Msg, req *net.UDPAddr) error {
 
 	c.logger.Debugf("Sent msg (%v) to (%v)", msg.Id, req.IP.String())
 	return nil
+}
+
+func block(m dns.Msg) dns.Msg {
+	msg := m.Copy()
+	msg.MsgHdr.Response = true
+	msg.MsgHdr.Opcode = dns.RcodeNameError
+	msg.MsgHdr.Authoritative = true
+	msg.Answer = make([]dns.RR, 0)
+
+	return *msg
 }
