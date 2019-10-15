@@ -6,6 +6,7 @@ import (
 	"github.com/foae/gorgonzola/repository"
 	"github.com/miekg/dns"
 	"net"
+	"time"
 )
 
 // ListenAndServe holds the logic for handling an incoming DNS request.
@@ -99,9 +100,21 @@ func (c *Conn) ListenAndServe(
 				responseRegistry.remove(msg.Id)
 				c.logger.Debugf("Responded to original requester (%v) for msg (%v): %v", originalReq.String(), msg.Id, msg.Question)
 
-				_, err := c.db.Read(msg.Id)
+				// Also update in repository.
+				q, err := c.db.Find(msg.Id)
 				if err != nil {
 					c.logger.Errorf("could not read query entry (%v): %v", msg.Id, err)
+				}
+
+				q.Responded = true
+				ts := time.Now()
+				q.UpdatedAt = &ts
+				if len(msg.Answer) > 0 {
+					q.Response = msg.Answer[0].String()
+				}
+
+				if err := c.db.Update(q); err != nil {
+					c.logger.Errorf("could not update query entry (%v): %v", msg.Id, err)
 				}
 			}
 		}

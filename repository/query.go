@@ -1,6 +1,7 @@
 package repository
 
 import (
+	"fmt"
 	"github.com/miekg/dns"
 	uuid "github.com/satori/go.uuid"
 	"log"
@@ -8,13 +9,6 @@ import (
 	"strings"
 	"time"
 )
-
-type Queryable interface {
-	Create(q *Query) error
-	Read(id uint16) (*Query, error)
-	Update(q *Query) error
-	Delete(q *Query) error
-}
 
 const (
 	TypeNone   QueryType = "None"
@@ -30,7 +24,17 @@ const (
 	TypeOPT    QueryType = "OPT"
 	TypeDNSKEY QueryType = "DNSKEY"
 	TypeSPF    QueryType = "SPF"
+
+	queriesTableName = "queries"
 )
+
+type Queryable interface {
+	Create(q *Query) error
+	Find(id uint16) (*Query, error)
+	FindAll() ([]*Query, error)
+	Update(q *Query) error
+	Delete(q *Query) error
+}
 
 var (
 	QueryTypeMap = map[uint16]QueryType{
@@ -53,31 +57,33 @@ var (
 type QueryType string
 
 type Query struct {
-	ID             uint16     `json:"id" db:"id"`
+	ID             int64      `json:"id" db:"id"`
 	UUID           string     `json:"uuid" db:"uuid"`
 	Type           QueryType  `json:"type" db:"type"`
 	Originator     string     `json:"originator" db:"originator"`
-	OriginatorType uint8      `json:"originatorType" db:"originator_type"`
+	OriginatorType int        `json:"originator_type" db:"originator_type"`
 	Domain         string     `json:"domain" db:"domain"`
 	RootDomain     string     `json:"rootDomain" db:"root_domain"`
 	Responded      bool       `json:"responded" db:"responded"`
+	Response       string     `json:"response,omitempty" db:"response,omitempty"`
 	Blocked        bool       `json:"blocked" db:"blocked"`
 	Valid          bool       `json:"valid" db:"valid"`
-	CreatedAt      time.Time  `json:"createdAt" db:"created_at"`
-	UpdatedAt      *time.Time `json:"updatedAt,omitempty" db:"updated_at,omitempty"`
+	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
+	UpdatedAt      *time.Time `json:"updated_at,omitempty" db:"updated_at,omitempty"`
 }
 
 func NewQuery(req net.UDPAddr, msg dns.Msg) *Query {
 	q := &Query{
-		ID:         msg.Id,
+		ID:         int64(msg.Id),
 		UUID:       uuid.NewV4().String(),
 		Originator: req.IP.String(),
-		OriginatorType: func() uint8 {
+		OriginatorType: func() int {
 			if req.IP.To4() != nil {
 				return 4
 			}
 			return 6
 		}(),
+		Response:  "",
 		Responded: false,
 		Blocked:   false,
 		Valid:     true,
@@ -99,6 +105,12 @@ func NewQuery(req net.UDPAddr, msg dns.Msg) *Query {
 	}
 	q.Type = qt
 
+	if msg.MsgHdr.Response {
+		if len(msg.Answer) > 0 {
+			q.Response = msg.Answer[0].String() // TODO: handle multiple answers
+		}
+	}
+
 	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
 	rootDomain := func() string {
 		s := strings.Split(domain, ".")
@@ -117,11 +129,79 @@ func NewQuery(req net.UDPAddr, msg dns.Msg) *Query {
 }
 
 func (r *Repo) Create(q *Query) error {
+	res, err := r.db.NamedExec(`
+		INSERT INTO `+queriesTableName+` 
+	(
+		id, 
+		uuid, 
+		type,
+		originator,
+		originator_type,
+		domain,
+		root_domain,
+		responded,
+		response,
+		blocked,
+		valid,
+		created_at
+	) 
+		VALUES 
+	(
+		:id, 
+		:uuid, 
+		:type,
+		:originator,
+		:originator_type,
+		:domain,
+		:root_domain,
+		:responded,
+		:response,
+		:blocked,
+		:valid,
+		:created_at
+	)
+	`,
+		q,
+	)
+
+	if err != nil {
+		return fmt.Errorf("repo: create: %v", err)
+	}
+
+	rw, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("repo: create: rows affected: %v", err)
+	}
+
+	if rw != 1 {
+		r.logger.Errorf("repo: create: expecting 1 row affected, got (%v)", rw)
+	}
+
 	return nil
 }
 
-func (r *Repo) Read(id uint16) (*Query, error) {
-	return &Query{}, nil
+func (r *Repo) Find(id uint16) (*Query, error) {
+	qr := `
+		SELECT * FROM queries 
+		WHERE id = ?
+		AND created_at >= ? 
+		LIMIT 1
+	`
+	q := Query{}
+	if err := r.db.Get(&q, qr, id, time.Now().Add(time.Minute*time.Duration(-30))); err != nil {
+		return nil, fmt.Errorf("repo: find (%v): %v", id, err)
+	}
+
+	return &q, nil
+}
+
+func (r *Repo) FindAll() ([]*Query, error) {
+	qs := make([]*Query, 0)
+	if err := r.db.Select(&qs, "SELECT * FROM queries ORDER BY created_at DESC"); err != nil {
+		return nil, fmt.Errorf("repo: could not read all: %v", err)
+	}
+
+	return qs, nil
 }
 
 func (r *Repo) Delete(q *Query) error {
@@ -129,5 +209,29 @@ func (r *Repo) Delete(q *Query) error {
 }
 
 func (r *Repo) Update(q *Query) error {
+	res, err := r.db.NamedExec(`
+		UPDATE `+queriesTableName+` SET
+			responded = :responded,
+			response = :response,
+			blocked = :blocked,
+			valid = :valid,
+			updated_at = :updated_at
+		WHERE uuid = :uuid
+	`,
+		q,
+	)
+	if err != nil {
+		return fmt.Errorf("repo: update: %v", err)
+	}
+
+	rw, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("repo: update: rows affected: %v", err)
+	}
+
+	if rw != 1 {
+		r.logger.Errorf("repo: expecting 1 row affected, got (%v) for (%#v)", rw, q)
+	}
+
 	return nil
 }
