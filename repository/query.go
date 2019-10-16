@@ -107,7 +107,8 @@ func NewQuery(req net.UDPAddr, msg dns.Msg) *Query {
 
 	if msg.MsgHdr.Response {
 		if len(msg.Answer) > 0 {
-			q.Response = msg.Answer[0].String() // TODO: handle multiple answers
+			// TODO: handle multiple answers
+			q.Response = strings.TrimSuffix(msg.Answer[0].Header().Name, ".")
 		}
 	}
 

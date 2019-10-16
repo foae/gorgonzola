@@ -6,6 +6,7 @@ import (
 	"github.com/foae/gorgonzola/repository"
 	"github.com/miekg/dns"
 	"net"
+	"strings"
 	"time"
 )
 
@@ -77,7 +78,7 @@ func (c *Conn) ListenAndServe(
 
 				c.logger.Debugf("Forwarded msg (%v) to upstream DNS (%v): %v", msg.Id, c.upstreamResolver.String(), msg.Question)
 
-			case true:
+			default:
 				c.logger.Infof("Query response for (%v) from (%v)", msg.Question[0].Name, req.IP.String())
 
 				// This is a response.
@@ -85,6 +86,7 @@ func (c *Conn) ListenAndServe(
 				originalReq := responseRegistry.retrieve(msg.Id)
 				if originalReq == nil {
 					c.logger.Errorf("dns: found dangling DNS msg (%v): %v", msg.Id, msg.Question)
+					responseRegistry.remove(msg.Id)
 					continue
 				}
 
@@ -110,7 +112,7 @@ func (c *Conn) ListenAndServe(
 				ts := time.Now()
 				q.UpdatedAt = &ts
 				if len(msg.Answer) > 0 {
-					q.Response = msg.Answer[0].String()
+					q.Response = strings.TrimSuffix(msg.Answer[0].Header().Name, ".")
 				}
 
 				if err := c.db.Update(q); err != nil {
