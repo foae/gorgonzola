@@ -2,7 +2,6 @@ package dns
 
 import (
 	"fmt"
-	"github.com/foae/gorgonzola/repository"
 	"go.uber.org/zap"
 	"log"
 	"net"
@@ -35,33 +34,15 @@ func NewUDPConn(localDNSPort int, upstreamResolver *net.UDPAddr) (*Conn, error) 
 	}, nil
 }
 
+func (c *Conn) ReadFromUDP(buf []byte) (int, *net.UDPAddr, error) {
+	return c.udpConn.ReadFromUDP(buf)
+}
+
 func (c *Conn) Close() error {
-	var errs []error
-	if err := c.udpConn.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("dns: err closing UDP conn: %v", err))
-	}
-
-	if err := c.logger.Sync(); err != nil {
-		errs = append(errs, fmt.Errorf("dns: err closing logger: %v", err))
-	}
-
-	if err := c.db.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("dns: err closing db: %v", err))
-	}
-
-	var e error
-	for _, err := range errs {
-		e = fmt.Errorf("%v; ", err)
-	}
-
-	return e
+	return c.udpConn.Close()
 }
 
 func (c *Conn) WithConfig(cfg Config) {
-	if cfg.DB != nil {
-		c.db = cfg.DB
-	}
-
 	if cfg.Logger != nil {
 		c.logger = cfg.Logger
 	}

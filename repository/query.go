@@ -3,10 +3,6 @@ package repository
 import (
 	"fmt"
 	"github.com/miekg/dns"
-	uuid "github.com/satori/go.uuid"
-	"log"
-	"net"
-	"strings"
 	"time"
 )
 
@@ -70,63 +66,6 @@ type Query struct {
 	Valid          bool       `json:"valid" db:"valid"`
 	CreatedAt      time.Time  `json:"created_at" db:"created_at"`
 	UpdatedAt      *time.Time `json:"updated_at,omitempty" db:"updated_at,omitempty"`
-}
-
-func NewQuery(req net.UDPAddr, msg dns.Msg) *Query {
-	q := &Query{
-		ID:         int64(msg.Id),
-		UUID:       uuid.NewV4().String(),
-		Originator: req.IP.String(),
-		OriginatorType: func() int {
-			if req.IP.To4() != nil {
-				return 4
-			}
-			return 6
-		}(),
-		Response:  "",
-		Responded: false,
-		Blocked:   false,
-		Valid:     true,
-		CreatedAt: time.Now(),
-		UpdatedAt: nil,
-	}
-
-	if len(msg.Question) == 0 {
-		q.Valid = false
-		log.Printf("repository: msg question not valid: 0 length: %v", msg.Question)
-		return q
-	}
-
-	qt, ok := QueryTypeMap[msg.Question[0].Qtype]
-	if !ok {
-		q.Valid = false
-		log.Printf("repository: query type not mapped: got (%#v)", msg.Question)
-		return q
-	}
-	q.Type = qt
-
-	if msg.MsgHdr.Response {
-		if len(msg.Answer) > 0 {
-			// TODO: handle multiple answers
-			q.Response = strings.TrimSuffix(msg.Answer[0].Header().Name, ".")
-		}
-	}
-
-	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-	rootDomain := func() string {
-		s := strings.Split(domain, ".")
-		if len(s) <= 2 {
-			// No subdomain requested.
-			return domain
-		}
-
-		return s[len(s)-2] + "." + s[len(s)-1]
-	}()
-
-	q.Domain = domain
-	q.RootDomain = rootDomain
-
-	return q
 }
 
 func (r *Repo) Create(q *Query) error {

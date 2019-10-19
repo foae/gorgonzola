@@ -5,6 +5,7 @@ import (
 	"github.com/blendle/zapdriver"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -12,6 +13,20 @@ import (
 	"strconv"
 	"time"
 )
+
+var (
+	toClose []io.Closer
+)
+
+func registerOnClose(closer io.Closer) {
+	toClose = append(toClose, closer)
+}
+
+func closeAll() {
+	for _, c := range toClose {
+		_ = c.Close()
+	}
+}
 
 func mustGetEnv(value string) string {
 	v := os.Getenv(value)

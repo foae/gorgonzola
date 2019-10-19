@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"github.com/foae/gorgonzola/dns"
 	"github.com/foae/gorgonzola/repository"
+	dns2 "github.com/miekg/dns"
+	"github.com/patrickmn/go-cache"
 	"log"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -43,16 +46,12 @@ func main() {
 		hostname = fmt.Sprintf("pid-%v-ts-%v", os.Getpid(), time.Now().UnixNano())
 	}
 	upstreamResolver := &net.UDPAddr{Port: 53, IP: net.ParseIP(upstreamDNS)}
-	domainBlocklist := dns.NewBlocklist([]string{
-		"ads.google.com.",
-		"ad.google.com.",
-		"facebook.com.",
-		"microsoft.com.",
-	})
-
-	// Keep track of all UDP messages
-	// that need to be reconciled.
-	responseRegistry := dns.NewResponseRegistry()
+	//domainBlocklist := dns.NewBlocklist([]string{
+	//	"ads.google.com.",
+	//	"ad.google.com.",
+	//	"facebook.com.",
+	//	"microsoft.com.",
+	//})
 
 	/*
 		Setup HTTP Router
@@ -89,7 +88,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not init Repository repo: %v", err)
 	}
-	defer db.Close() // nolint
+	registerOnClose(db)
+
+	/*
+		Setup in-memory cache
+	*/
+	cacher := cache.New(time.Minute*30, time.Minute*5)
 
 	/*
 		Fire up the UDP listener.
@@ -99,7 +103,12 @@ func main() {
 		log.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
 	}
 	conn.WithConfig(dns.Config{Logger: logger})
-	defer conn.Close() // nolint
+	registerOnClose(conn)
+
+	/*
+		Setup the DNS service
+	*/
+	svc := dns.NewService(db, cacher, logger)
 
 	/*
 		Process UDP messages.
@@ -108,26 +117,55 @@ func main() {
 	defer cancel()
 	go func() {
 		logger.Infof("Waiting for messages via UDP on port (%v)...", localDNSPort)
-		if err := conn.ListenAndServe(cctx, domainBlocklist, responseRegistry); err != nil {
-			logger.Errorf("error in worker: %v", err)
-			return
-		}
 
-		//for {
-		//	select {
-		//	case <-ctx.Done():
-		//		if err := conn.Close(); err != nil {
-		//			conn.logger.Errorf("could not close conn: %v", err)
-		//		}
-		//
-		//		conn.logger.Info("dns: closed background UDP listener.")
-		//		return
-		//	default:
-		//		if ctx.Err() != nil {
-		//			return
-		//		}
-		//	}
-		//}
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Info("Closed DNS service.")
+				return
+			default:
+				if ctx.Err() != nil {
+					return
+				}
+
+				// Read incoming bytes via UDP.
+				buf := make([]byte, 576, 1024)
+				_, addr, err := conn.ReadFromUDP(buf)
+				switch {
+				case err == nil:
+					// OK.
+				case strings.Contains(err.Error(), "use of closed network connection"):
+					return
+				default:
+					logger.Errorf("could not read from UDP conn: %v", err)
+					continue
+				}
+
+				if !svc.CanHandle(addr) {
+					logger.Errorf("cannot handle non-IPv4 request: %v", addr.String())
+					continue
+				}
+
+				// Unpack and validate the received message.
+				var msg dns2.Msg
+				if err := msg.Unpack(buf); err != nil {
+					logger.Errorf("could not read message from (%v)", addr.String())
+					continue
+				}
+
+				// Handle the DNS request.
+				switch msg.MsgHdr.Response {
+				case false:
+					if err := svc.HandleInitialRequest(conn, msg, addr); err != nil {
+						logger.Error(err)
+					}
+				default:
+					if err := svc.HandleResponseRequest(conn, msg); err != nil {
+						logger.Error(err)
+					}
+				}
+			}
+		}
 	}()
 
 	/*
@@ -149,7 +187,7 @@ func main() {
 		err := srv.ListenAndServe()
 		switch {
 		case err == http.ErrServerClosed:
-			logger.Infof("HTTP listener closed: %v", err)
+			logger.Info(err)
 		case err != nil:
 			logger.Fatalf("HTTP listener closed with an error: %v", err)
 		}
@@ -165,11 +203,13 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	logger.Infof("Stopping servers, received signal: %v", <-sig)
 
-	cancel()
-	ctxCancel, cCancel := context.WithTimeout(cctx, time.Second*3)
+	ctxCancel, cCancel := context.WithTimeout(cctx, time.Second*5)
 	defer cCancel()
 
+	cancel()
+	closeAll()
+
 	if err := srv.Shutdown(ctxCancel); err != nil {
-		logger.Errorf("could not close the HTTP server gracefully: %v", err)
+		logger.Fatalf("could not close the HTTP server gracefully: %v", err)
 	}
 }
