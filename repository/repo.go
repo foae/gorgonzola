@@ -48,15 +48,15 @@ func NewRepo(cfg Config) (*Repo, error) {
 	dbFile := "./repository/_db/db.sqlite3"
 	db, err := sqlx.Open("sqlite3", dbFile)
 	if err != nil {
-		return nil, fmt.Errorf("could not open DB file (%v): %v", dbFile, err)
+		return nil, fmt.Errorf("could not open Repository file (%v): %v", dbFile, err)
 	}
 
 	if err := db.Ping(); err != nil {
-		return nil, fmt.Errorf("could not ping DB (%v): %v", dbFile, err)
+		return nil, fmt.Errorf("could not ping Repository (%v): %v", dbFile, err)
 	}
 
 	if _, err := db.Exec(schema); err != nil {
-		return nil, fmt.Errorf("could not create schema in DB (%v): %v", dbFile, err)
+		return nil, fmt.Errorf("could not create schema in Repository (%v): %v", dbFile, err)
 	}
 
 	return &Repo{db: db, logger: cfg.Logger}, nil

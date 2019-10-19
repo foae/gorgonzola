@@ -11,22 +11,22 @@ import (
 
 // Handler defines the structure of a handler.
 type Handler struct {
-	logger *zap.SugaredLogger
-	db     repository.Interactor
+	logger     *zap.SugaredLogger
+	repository repository.Interactor
 }
 
 // Config defines the structure of a handler config.
 type Config struct {
-	Logger *zap.SugaredLogger
-	DB     repository.Interactor
+	Logger     *zap.SugaredLogger
+	Repository repository.Interactor
 }
 
 // New returns a new instance of a handler
 // based on a given configuration.
 func New(cfg Config) *Handler {
 	return &Handler{
-		logger: cfg.Logger,
-		db:     cfg.DB,
+		logger:     cfg.Logger,
+		repository: cfg.Repository,
 	}
 }
 

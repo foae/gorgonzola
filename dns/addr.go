@@ -3,7 +3,6 @@ package dns
 import (
 	"bytes"
 	"encoding/gob"
-	"go.uber.org/zap/buffer"
 	"net"
 )
 
@@ -12,7 +11,7 @@ type Addr struct {
 }
 
 func (a Addr) Pack() ([]byte, error) {
-	buf := buffer.Buffer{}
+	buf := bytes.Buffer{}
 	if err := gob.NewEncoder(&buf).Encode(a.addr); err != nil {
 		return nil, err
 	}

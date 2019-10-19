@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/foae/gorgonzola/handler/dns"
+	"github.com/foae/gorgonzola/dns"
 	"github.com/foae/gorgonzola/repository"
 	"log"
 	"net"
@@ -20,6 +20,11 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	envDev  = "dev"
+	envProd = "prod"
+)
+
 func main() {
 	/*
 		ENV vars
@@ -27,7 +32,10 @@ func main() {
 	upstreamDNS := mustGetEnv("UPSTREAM_DNS_SERVER_IP")
 	localDNSPort := mustGetEnvInt("DNS_LISTEN_PORT")
 	localHTTPPort := mustGetEnv("HTTP_LISTEN_ADDR")
-	env := mustGetEnv("ENV")
+	env := os.Getenv("ENV")
+	if env != envDev {
+		env = envProd
+	}
 
 	ctx := context.Background()
 	hostname, err := os.Hostname()
@@ -47,13 +55,15 @@ func main() {
 	responseRegistry := dns.NewResponseRegistry()
 
 	/*
-		HTTP Router
+		Setup HTTP Router
 	*/
 	switch env {
-	case "dev":
+	case envDev:
 		gin.SetMode(gin.DebugMode)
-	default:
+	case envProd:
 		gin.SetMode(gin.ReleaseMode)
+	default:
+		gin.SetMode(gin.TestMode)
 	}
 	router := gin.Default()
 
@@ -77,7 +87,7 @@ func main() {
 	*/
 	db, err := repository.NewRepo(repository.Config{Logger: logger})
 	if err != nil {
-		log.Fatalf("could not init DB repo: %v", err)
+		log.Fatalf("could not init Repository repo: %v", err)
 	}
 	defer db.Close() // nolint
 
@@ -88,10 +98,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
 	}
-	conn.WithConfig(dns.Config{
-		DB:     db,
-		Logger: logger,
-	})
+	conn.WithConfig(dns.Config{Logger: logger})
 	defer conn.Close() // nolint
 
 	/*
@@ -105,26 +112,46 @@ func main() {
 			logger.Errorf("error in worker: %v", err)
 			return
 		}
+
+		//for {
+		//	select {
+		//	case <-ctx.Done():
+		//		if err := conn.Close(); err != nil {
+		//			conn.logger.Errorf("could not close conn: %v", err)
+		//		}
+		//
+		//		conn.logger.Info("dns: closed background UDP listener.")
+		//		return
+		//	default:
+		//		if ctx.Err() != nil {
+		//			return
+		//		}
+		//	}
+		//}
 	}()
 
 	/*
 		HTTP routes attachment.
 	*/
 	handler := httpHandler.New(httpHandler.Config{
-		Logger: logger,
-		DB:     db,
+		Logger:     logger,
+		Repository: db,
 	})
 	router.POST("/blocklist", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
+	srv := http.Server{
+		Addr:    localHTTPPort,
+		Handler: router,
+	}
 
 	go func() {
 		logger.Infof("Started HTTP server on port (%v)", localHTTPPort)
-		err := router.Run(localHTTPPort)
+		err := srv.ListenAndServe()
 		switch {
 		case err == http.ErrServerClosed:
-			logger.Infof("http listener closed: %v", err)
+			logger.Infof("HTTP listener closed: %v", err)
 		case err != nil:
-			logger.Fatalf("http listener error: %v", err)
+			logger.Fatalf("HTTP listener closed with an error: %v", err)
 		}
 	}()
 
@@ -136,8 +163,13 @@ func main() {
 
 	sig := make(chan os.Signal)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	logger.Infof("Stopping servers, received shutdown signal: %v", <-sig)
+	logger.Infof("Stopping servers, received signal: %v", <-sig)
 
 	cancel()
-	time.Sleep(time.Second * 2)
+	ctxCancel, cCancel := context.WithTimeout(cctx, time.Second*3)
+	defer cCancel()
+
+	if err := srv.Shutdown(ctxCancel); err != nil {
+		logger.Errorf("could not close the HTTP server gracefully: %v", err)
+	}
 }

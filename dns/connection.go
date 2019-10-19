@@ -11,14 +11,12 @@ import (
 
 type Conn struct {
 	udpConn          *net.UDPConn
-	db               repository.Interactor
 	logger           *zap.SugaredLogger
 	m                *sync.RWMutex
 	upstreamResolver *net.UDPAddr
 }
 
 type Config struct {
-	DB               repository.Interactor
 	Logger           *zap.SugaredLogger
 	UpstreamResolver *net.UDPAddr
 }
