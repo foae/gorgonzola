@@ -3,10 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/foae/gorgonzola/dns"
-	"github.com/foae/gorgonzola/repository"
-	dns2 "github.com/miekg/dns"
-	"github.com/patrickmn/go-cache"
 	"log"
 	"net"
 	"net/http"
@@ -16,6 +12,11 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/foae/gorgonzola/dns"
+	"github.com/foae/gorgonzola/repository"
+	dns2 "github.com/miekg/dns"
+	"github.com/patrickmn/go-cache"
 
 	httpHandler "github.com/foae/gorgonzola/handler/http"
 	"github.com/gin-gonic/gin"
@@ -45,7 +46,15 @@ func main() {
 	if err != nil {
 		hostname = fmt.Sprintf("pid-%v-ts-%v", os.Getpid(), time.Now().UnixNano())
 	}
-	upstreamResolver := &net.UDPAddr{Port: 53, IP: net.ParseIP(upstreamDNS)}
+
+	ip := net.ParseIP(upstreamDNS)
+	switch {
+	case ip == nil:
+		log.Fatalf("upstream dns (%v) is not a valid IP", upstreamDNS)
+	case ip.To4() == nil:
+		log.Fatalf("only IPv4 is supported at this time; not this (%v)", upstreamDNS)
+	}
+	upstreamResolver := &net.UDPAddr{Port: 53, IP: ip}
 	//domainBlocklist := dns.NewBlocklist([]string{
 	//	"ads.google.com.",
 	//	"ad.google.com.",
@@ -71,7 +80,7 @@ func main() {
 	*/
 	var logger *zap.SugaredLogger
 	switch env {
-	case "dev":
+	case envDev:
 		logger, err = newDevelopmentLogger()
 	default:
 		logger, err = newProductionLogger()
@@ -177,6 +186,8 @@ func main() {
 	})
 	router.POST("/blocklist", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
+	router.GET("/data", handler.Data)
+
 	srv := http.Server{
 		Addr:    localHTTPPort,
 		Handler: router,

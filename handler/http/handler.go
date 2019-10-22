@@ -2,11 +2,12 @@ package http
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/url"
+
 	"github.com/foae/gorgonzola/repository"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
-	"net/http"
-	"net/url"
 )
 
 // Handler defines the structure of a handler.
@@ -30,8 +31,20 @@ func New(cfg Config) *Handler {
 	}
 }
 
+// Health ...
 func (h *Handler) Health(g *gin.Context) {
 	g.JSON(http.StatusOK, "OK")
+}
+
+// Data retrieves all the data from the repository.
+func (h *Handler) Data(g *gin.Context) {
+	q, err := h.repository.FindAll()
+	if err != nil {
+		g.JSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	g.JSON(http.StatusOK, q)
 }
 
 // AddToBlocklist defines an action at the handler.
