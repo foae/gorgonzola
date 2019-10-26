@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/foae/gorgonzola/adblock"
+	"go.uber.org/zap"
 	"log"
 	"net"
 	"net/http"
@@ -14,14 +16,11 @@ import (
 	"time"
 
 	"github.com/foae/gorgonzola/dns"
+	httpHandler "github.com/foae/gorgonzola/handler/http"
 	"github.com/foae/gorgonzola/repository"
+	"github.com/gin-gonic/gin"
 	dns2 "github.com/miekg/dns"
 	"github.com/patrickmn/go-cache"
-
-	httpHandler "github.com/foae/gorgonzola/handler/http"
-	"github.com/gin-gonic/gin"
-
-	"go.uber.org/zap"
 )
 
 const (
@@ -47,34 +46,6 @@ func main() {
 		hostname = fmt.Sprintf("pid-%v-ts-%v", os.Getpid(), time.Now().UnixNano())
 	}
 
-	ip := net.ParseIP(upstreamDNS)
-	switch {
-	case ip == nil:
-		log.Fatalf("upstream dns (%v) is not a valid IP", upstreamDNS)
-	case ip.To4() == nil:
-		log.Fatalf("only IPv4 is supported at this time; not this (%v)", upstreamDNS)
-	}
-	upstreamResolver := &net.UDPAddr{Port: 53, IP: ip}
-	//domainBlocklist := dns.NewBlocklist([]string{
-	//	"ads.google.com.",
-	//	"ad.google.com.",
-	//	"facebook.com.",
-	//	"microsoft.com.",
-	//})
-
-	/*
-		Setup HTTP Router
-	*/
-	switch env {
-	case envDev:
-		gin.SetMode(gin.DebugMode)
-	case envProd:
-		gin.SetMode(gin.ReleaseMode)
-	default:
-		gin.SetMode(gin.TestMode)
-	}
-	router := gin.Default()
-
 	/*
 		Logging
 	*/
@@ -93,11 +64,75 @@ func main() {
 	/*
 		Setup data layer
 	*/
-	db, err := repository.NewRepo(repository.Config{Logger: logger})
+	repo, err := repository.NewRepo(repository.Config{Logger: logger})
 	if err != nil {
-		log.Fatalf("could not init Repository repo: %v", err)
+		logger.Fatalf("could not init Repository repo: %v", err)
 	}
-	registerOnClose(db)
+	registerOnClose(repo)
+
+	/*
+		AdBlock Service
+	*/
+	adBlockService := adblock.NewServiceFrom(logger)
+
+	/*
+		Upstream DNS
+	*/
+	ip := net.ParseIP(upstreamDNS)
+	switch {
+	case ip == nil:
+		logger.Fatalf("upstream dns (%v) is not a valid IP", upstreamDNS)
+	case ip.To4() == nil:
+		logger.Fatalf("only IPv4 is supported at this time; not this (%v)", upstreamDNS)
+	}
+	upstreamResolver := &net.UDPAddr{Port: 53, IP: ip}
+
+	/*
+		Cache files locally from the provided URLs
+	*/
+	//urls := []string{
+	//	"https://austinhuang.me/0131-block-list/list.txt",
+	//	"https://280blocker.net/files/280blocker_adblock_nanj_supp.txt",
+	//	"https://raw.githubusercontent.com/EnergizedProtection/block/master/porn/formats/filter",
+	//	"https://raw.githubusercontent.com/DandelionSprout/adfilt/master/NorwegianExperimentalList%20alternate%20versions/NordicFiltersABP.txt",
+	//	"https://raw.githubusercontent.com/Crystal-RainSlide/AdditionalFiltersCN/master/all.txt",
+	//	"https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts", // hosts file
+	//}
+	//for _, u := range urls {
+	//	if err := repo.DownloadFromURL(u); err != nil {
+	//		logger.Debugf("error for (%v): %v", u, err)
+	//	}
+	//}
+
+	/*
+		Read files from local storage
+	*/
+	fileList, err := repo.StoredFilesList()
+	if err != nil {
+		log.Fatalf("could not list files: %v", err)
+	}
+
+	/*
+		LOAD AdBlock Plus providers
+	*/
+	for _, fl := range fileList {
+		if err := adBlockService.LoadAdBlockProvidersFromFile(fl); err != nil {
+			logger.Errorf("could not load provider: %v", err)
+		}
+	}
+
+	/*
+		Setup HTTP Router
+	*/
+	switch env {
+	case envDev:
+		gin.SetMode(gin.DebugMode)
+	case envProd:
+		gin.SetMode(gin.ReleaseMode)
+	default:
+		gin.SetMode(gin.TestMode)
+	}
+	router := gin.Default()
 
 	/*
 		Setup in-memory cache
@@ -107,17 +142,17 @@ func main() {
 	/*
 		Fire up the UDP listener.
 	*/
-	conn, err := dns.NewUDPConn(localDNSPort, upstreamResolver)
+	dnsConn, err := dns.NewUDPConn(localDNSPort, upstreamResolver)
 	if err != nil {
-		log.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
+		logger.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
 	}
-	conn.WithConfig(dns.Config{Logger: logger})
-	registerOnClose(conn)
+	dnsConn.WithConfig(dns.Config{Logger: logger})
+	registerOnClose(dnsConn)
 
 	/*
 		Setup the DNS service
 	*/
-	svc := dns.NewService(db, cacher, logger)
+	dnsService := dns.NewService(repo, cacher, logger, adBlockService)
 
 	/*
 		Process UDP messages.
@@ -139,18 +174,18 @@ func main() {
 
 				// Read incoming bytes via UDP.
 				buf := make([]byte, 576, 1024)
-				_, addr, err := conn.ReadFromUDP(buf)
+				_, addr, err := dnsConn.ReadFromUDP(buf)
 				switch {
 				case err == nil:
 					// OK.
 				case strings.Contains(err.Error(), "use of closed network connection"):
 					return
 				default:
-					logger.Errorf("could not read from UDP conn: %v", err)
+					logger.Errorf("could not read from UDP dnsConn: %v", err)
 					continue
 				}
 
-				if !svc.CanHandle(addr) {
+				if !dnsService.CanHandle(addr) {
 					logger.Errorf("cannot handle non-IPv4 request: %v", addr.String())
 					continue
 				}
@@ -165,11 +200,11 @@ func main() {
 				// Handle the DNS request.
 				switch msg.MsgHdr.Response {
 				case false:
-					if err := svc.HandleInitialRequest(conn, msg, addr); err != nil {
+					if err := dnsService.HandleInitialRequest(dnsConn, msg, addr); err != nil {
 						logger.Error(err)
 					}
 				default:
-					if err := svc.HandleResponseRequest(conn, msg); err != nil {
+					if err := dnsService.HandleResponseRequest(dnsConn, msg); err != nil {
 						logger.Error(err)
 					}
 				}
@@ -181,12 +216,14 @@ func main() {
 		HTTP routes attachment.
 	*/
 	handler := httpHandler.New(httpHandler.Config{
-		Logger:     logger,
-		Repository: db,
+		Logger:        logger,
+		Repository:    repo,
+		ParserService: adBlockService,
 	})
 	router.POST("/blocklist", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
 	router.GET("/data", handler.Data)
+	router.GET("/query/:url", handler.ShouldBlock)
 
 	srv := http.Server{
 		Addr:    localHTTPPort,

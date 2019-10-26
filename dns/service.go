@@ -2,6 +2,8 @@ package dns
 
 import (
 	"fmt"
+	"github.com/foae/gorgonzola/adblock"
+	"github.com/foae/gorgonzola/internal"
 	"github.com/foae/gorgonzola/repository"
 	"github.com/miekg/dns"
 	uuid "github.com/satori/go.uuid"
@@ -16,35 +18,52 @@ type Service struct {
 	repository repository.Interactor
 	cache      Cacher
 	logger     Logger
+	adblocker  adblock.Servicer
 }
 
 func NewService(
 	repo repository.Interactor,
 	cache Cacher,
 	logger Logger,
+	adblocker adblock.Servicer,
 ) *Service {
 	return &Service{
 		repository: repo,
 		cache:      cache,
 		logger:     logger,
+		adblocker:  adblocker,
 	}
 }
 
 func (svc *Service) HandleInitialRequest(conn *Conn, msg dns.Msg, addr *net.UDPAddr) error {
-	svc.logger.Infof("Initial query for (%v) from (%v)...", msg.Question[0].Name, addr.IP.String())
+	svc.logger.Debugf("Initial query for (%v) from (%v)...", msg.Question[0].Name, addr.IP.String())
 
-	// Check if in domainBlocklist.
-	//if len(msg.Question) > 0 {
-	//	if domainBlocklist.exists(msg.Question[0].Name) {
-	//		msg = block(msg)
-	//		if err := svc.packMsgAndSend(msg, addr); err != nil {
-	//			return errRec("dns: could not pack and send: %v", err)
-	//		}
-	//
-	//		svc.logger.Debugf("Blocked (%v) in msg (%v)", msg.Question, msg.Id)
-	//		return nil
-	//	}
-	//}
+	if len(msg.Question) == 0 {
+		svc.logger.Infow("Received empty query.", "msg", msg)
+		return nil
+	}
+
+	// Check if this query can be blocked.
+	shouldBlock, err := svc.adblocker.ShouldBlock(msg.Question[0].Name)
+	switch {
+	case err != nil:
+		svc.logger.Errorf("could not run the adblocker service: %v", err)
+	case shouldBlock:
+		msg = svc.block(msg)
+		if err := svc.packMsgAndSend(conn, msg, addr); err != nil {
+			return fmt.Errorf("dns: could not pack and send blocked msg: %v", err)
+		}
+
+		q := newQueryFrom(*addr, msg)
+		q.Responded = true
+		q.Blocked = true
+		if err := svc.repository.Create(q); err != nil {
+			return fmt.Errorf("dns: could not persist blocked query in repo: %v", err)
+		}
+
+		svc.logger.Infof("Blocked (%v) in msg (%v)", msg.Question, msg.Id)
+		return nil
+	}
 
 	// Forward to upstream DNS.
 	if err := svc.packMsgAndSend(conn, msg, conn.upstreamResolver); err != nil {
@@ -188,15 +207,7 @@ func newQueryFrom(req net.UDPAddr, msg dns.Msg) *repository.Query {
 	}
 
 	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
-	rootDomain := func() string {
-		s := strings.Split(domain, ".")
-		if len(s) <= 2 {
-			// No subdomain requested.
-			return domain
-		}
-
-		return s[len(s)-2] + "." + s[len(s)-1]
-	}()
+	rootDomain := internal.ExtractRootDomainFrom(domain)
 
 	q.Domain = domain
 	q.RootDomain = rootDomain
