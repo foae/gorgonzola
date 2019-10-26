@@ -10,6 +10,7 @@
 *.dylib
 repository/tmp/*
 repository/_db/*
+repository/file_storage/*
 
 # Test binary, built with `go test -c`
 *.test
