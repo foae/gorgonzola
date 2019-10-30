@@ -3,10 +3,10 @@ package repository
 import (
 	"encoding/base64"
 	"fmt"
+	"github.com/foae/gorgonzola/internal"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
-	"go.uber.org/zap"
 	"io"
 	"net/http"
 	"net/url"
@@ -36,11 +36,13 @@ CREATE INDEX IF NOT EXISTS queries_created_at_idx ON queries (created_at);
 `
 
 const (
-	sqliteFilePath  = "./repository/_db/db.sqlite3"
-	fileStoragePath = "./repository/file_storage"
-	fileSeparator   = "/"
+	sqliteFilePath      = "./repository/_db/db.sqlite3"
+	sqliteDirectoryPath = "./repository/_db"
+	fileDirectoryPath   = "./repository/file_storage"
+	fileSeparator       = "/"
 )
 
+// Interactor defines the needed functionality to interact with this package.
 type Interactor interface {
 	Close() error
 	Queryable
@@ -48,27 +50,43 @@ type Interactor interface {
 	DownloadFromURL(someURL string) error
 }
 
+// Config defines the configurable dependencies.
 type Config struct {
-	Logger          *zap.SugaredLogger
+	Logger          internal.Logger
 	FileStoragePath string
 	SqliteFilePath  string
 }
 
+// Repo defines the structure of the data layer.
 type Repo struct {
 	db              *sqlx.DB
-	logger          *zap.SugaredLogger
+	logger          internal.Logger
 	fileStoragePath string
 	sqliteFilePath  string
 }
 
+// NewRepo returns a new instance of the data layer handler.
 func NewRepo(cfg Config) (*Repo, error) {
 	if cfg.SqliteFilePath == "" {
 		cfg.SqliteFilePath = sqliteFilePath
 	}
 	if cfg.FileStoragePath == "" {
-		cfg.FileStoragePath = fileStoragePath
+		cfg.FileStoragePath = fileDirectoryPath
 	}
 
+	/*
+		Create the folder for file storage.
+	*/
+	if err := os.MkdirAll(sqliteDirectoryPath, os.ModeDir); err != nil {
+		return nil, fmt.Errorf("repo: could not create directories in path (%v): %v", sqliteDirectoryPath, err)
+	}
+	if err := os.MkdirAll(fileDirectoryPath, os.ModeDir); err != nil {
+		return nil, fmt.Errorf("repo: could not create directories in path (%v): %v", fileDirectoryPath, err)
+	}
+
+	/*
+		Setup the SQLite DB.
+	*/
 	db, err := sqlx.Open("sqlite3", cfg.SqliteFilePath)
 	if err != nil {
 		return nil, fmt.Errorf("repo: could not open Repository file (%v): %v", cfg.SqliteFilePath, err)
@@ -90,6 +108,8 @@ func NewRepo(cfg Config) (*Repo, error) {
 	}, nil
 }
 
+// DownloadFromURL parses and validates an HTTP URL and downloads the remote contents.
+// It is used to download and create a local cache of AdBlock Plus / Domains lists and other formats.
 func (r *Repo) DownloadFromURL(someURL string) error {
 	uurl, err := url.Parse(someURL)
 	if err != nil {
@@ -108,7 +128,7 @@ func (r *Repo) DownloadFromURL(someURL string) error {
 	if err != nil {
 		return fmt.Errorf("repo: could not create file name (%v): %v", fileName, err)
 	}
-	defer fileHandler.Close()
+	defer fileHandler.Close() // nolint
 
 	if _, err := io.Copy(fileHandler, resp.Body); err != nil {
 		return err
@@ -144,6 +164,7 @@ func (r *Repo) StoredFilesList() ([]string, error) {
 	return fileList, nil
 }
 
+// Close implements the Closer interface.
 func (r *Repo) Close() error {
 	return r.db.Close()
 }

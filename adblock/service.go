@@ -3,10 +3,11 @@ package adblock
 import (
 	"fmt"
 	bluele "github.com/bluele/adblock"
+	"github.com/foae/gorgonzola/internal"
 	pmezard "github.com/pmezard/adblock/adblock"
-	"go.uber.org/zap"
 	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -17,10 +18,10 @@ type Servicer interface {
 type Service struct {
 	adblockRules []*bluele.Rules
 	adbRules     []*pmezard.RuleMatcher
-	log          *zap.SugaredLogger
+	log          internal.Logger
 }
 
-func NewServiceFrom(logger *zap.SugaredLogger) *Service {
+func NewService(logger internal.Logger) *Service {
 	return &Service{
 		adblockRules: make([]*bluele.Rules, 0),
 		adbRules:     make([]*pmezard.RuleMatcher, 0),
@@ -28,7 +29,7 @@ func NewServiceFrom(logger *zap.SugaredLogger) *Service {
 	}
 }
 
-func (svc *Service) LoadAdBlockProvidersFromFile(filePath string) error {
+func (svc *Service) LoadAdBlockPlusProviders(filePath string) error {
 	head, err := PeekFile(filePath, 64)
 	if err != nil {
 		return fmt.Errorf("could not read file (%v): %v", filePath, err)
@@ -83,6 +84,7 @@ func (svc *Service) LoadAdBlockProvidersFromFile(filePath string) error {
 }
 
 func (svc *Service) ShouldBlock(someURL string) (bool, error) {
+	someURL = strings.TrimSuffix(someURL, ".")
 	uurl, err := url.Parse(someURL)
 	if err != nil {
 		return false, fmt.Errorf("(%v) is not a valid URL: %v", someURL, err)

@@ -1,30 +1,39 @@
 package dns
 
 import (
+	"errors"
 	"fmt"
 	"github.com/foae/gorgonzola/adblock"
 	"github.com/foae/gorgonzola/internal"
-	"github.com/foae/gorgonzola/repository"
-	"github.com/miekg/dns"
 	uuid "github.com/satori/go.uuid"
-	"log"
 	"net"
 	"strconv"
 	"strings"
 	"time"
 )
 
+// Repository describes the functionality necessary to interact with the data layer.
+type Repository interface {
+	Create(q *Query) error
+	Find(id uint16) (*Query, error)
+	FindAll() ([]*Query, error)
+	Update(q *Query) error
+	Delete(q *Query) error
+}
+
+// Service describes the structure needed to run and handle the service.
 type Service struct {
-	repository repository.Interactor
+	repository Repository
 	cache      Cacher
-	logger     Logger
+	logger     internal.Logger
 	adblocker  adblock.Servicer
 }
 
+// NewService describes the dependencies needed to build and return a *Service.
 func NewService(
-	repo repository.Interactor,
+	repo Repository,
 	cache Cacher,
-	logger Logger,
+	logger internal.Logger,
 	adblocker adblock.Servicer,
 ) *Service {
 	return &Service{
@@ -35,33 +44,36 @@ func NewService(
 	}
 }
 
-func (svc *Service) HandleInitialRequest(conn *Conn, msg dns.Msg, addr *net.UDPAddr) error {
-	svc.logger.Debugf("Initial query for (%v) from (%v)...", msg.Question[0].Name, addr.IP.String())
-
+// HandleInitialRequest will handle the initial dns request (query), taking decision whether it should
+// be blocked or forwarded to a preconfigured upstream DNS resolver.
+func (svc *Service) HandleInitialRequest(conn *Conn, msg Msg, addr *net.UDPAddr) error {
 	if len(msg.Question) == 0 {
-		svc.logger.Infow("Received empty query.", "msg", msg)
+		svc.logger.Infow("Received empty query.", "msg", msg, "addr", addr)
 		return nil
 	}
+
+	svc.logger.Debugf("Initial query for (%v) from (%v)...", msg.Question[0].Name, addr.IP.String())
 
 	// Check if this query can be blocked.
 	shouldBlock, err := svc.adblocker.ShouldBlock(msg.Question[0].Name)
 	switch {
 	case err != nil:
-		svc.logger.Errorf("could not run the adblocker service: %v", err)
+		svc.logger.Errorf("dns: could not run the adblocker service: %v", err)
 	case shouldBlock:
-		msg = svc.block(msg)
+		msg.block()
 		if err := svc.packMsgAndSend(conn, msg, addr); err != nil {
-			return fmt.Errorf("dns: could not pack and send blocked msg: %v", err)
+			return err
 		}
 
-		q := newQueryFrom(*addr, msg)
-		q.Responded = true
-		q.Blocked = true
+		q, err := newBlockedQueryFrom(*addr, msg)
+		if err != nil {
+			return err
+		}
 		if err := svc.repository.Create(q); err != nil {
-			return fmt.Errorf("dns: could not persist blocked query in repo: %v", err)
+			return err
 		}
 
-		svc.logger.Infof("Blocked (%v) in msg (%v)", msg.Question, msg.Id)
+		svc.logger.Infof("Blocked (%v) in msg (%v)", msg.Question[0].Name, msg.Id)
 		return nil
 	}
 
@@ -74,13 +86,17 @@ func (svc *Service) HandleInitialRequest(conn *Conn, msg dns.Msg, addr *net.UDPA
 	svc.cache.Set(strconv.Itoa(int(msg.Id)), addr, time.Minute*30)
 
 	// Store in the repository.
-	svc.createResource(msg, *addr)
+	if err := svc.createResource(msg, *addr); err != nil {
+		return err
+	}
 
 	svc.logger.Debugf("Forwarded msg (%v) to upstream DNS (%v): %v", msg.Id, conn.upstreamResolver.String(), msg.Question)
 	return nil
 }
 
-func (svc *Service) HandleResponseRequest(conn *Conn, msg dns.Msg) error {
+// HandleResponseRequest will handle any incoming responses from forwarded requests
+// to the upstream dns resolver(s). It will respond back to the original requester.
+func (svc *Service) HandleResponseRequest(conn *Conn, msg Msg) error {
 	msgID := strconv.Itoa(int(msg.Id))
 
 	// This is a response.
@@ -89,6 +105,7 @@ func (svc *Service) HandleResponseRequest(conn *Conn, msg dns.Msg) error {
 	if addrOrig == nil || !ok {
 		return fmt.Errorf("dns: found dangling DNS msg (%v): %v", msg.Id, msg.Question)
 	}
+
 	originalAddr, ok := addrOrig.(*net.UDPAddr)
 	if !ok {
 		svc.cache.Delete(msgID)
@@ -107,27 +124,52 @@ func (svc *Service) HandleResponseRequest(conn *Conn, msg dns.Msg) error {
 	svc.logger.Debugf("Responded to original requester (%v) for msg (%v): %v", originalAddr.String(), msg.Id, msg.Question)
 
 	// Also update in repository.
-	svc.updateResource(msg)
+	if err := svc.updateResource(msg); err != nil {
+		return err
+	}
 
 	return nil
 }
 
+// CanHandle decides whether our Service can handle the incoming request.
+// It will also validate if the requester provided a valid IP address.
+// Currently only IPv4 originators can be <handled>. IPv6 is in the makings.
 func (svc *Service) CanHandle(addr *net.UDPAddr) bool {
-	// We can handle only IPv4 for now.
-	return addr.IP.To4() != nil
-}
-
-func (svc *Service) createResource(msg dns.Msg, addr net.UDPAddr) {
-	q := newQueryFrom(addr, msg)
-	if err := svc.repository.Create(q); err != nil {
-		svc.logger.Errorf("could not create query entry: %v", err)
+	if addr.IP == nil || len(addr.IP) == 0 {
+		return false
 	}
+
+	ip := net.ParseIP(addr.IP.String())
+	if ip == nil || !ip.Equal(addr.IP) {
+		return false
+	}
+
+	// We can handle only IPv4 for now.
+	return ip.To4() != nil
 }
 
-func (svc *Service) updateResource(msg dns.Msg) {
+// createResource persists in the repository the newly created query
+// using the dns message and the requester's address.
+func (svc *Service) createResource(msg Msg, addr net.UDPAddr) error {
+	q, err := newQueryFrom(msg, addr)
+	if err != nil {
+		return fmt.Errorf("dns: could not create query entry: %v", err)
+	}
+
+	if err := svc.repository.Create(q); err != nil {
+		return fmt.Errorf("dns: could not persist query entry: %v", err)
+	}
+
+	return nil
+}
+
+// updateResource updates an existing entry in the repository.
+func (svc *Service) updateResource(msg Msg) error {
 	q, err := svc.repository.Find(msg.Id)
 	if err != nil {
-		svc.logger.Errorf("could not read query entry (%v): %v", msg.Id, err)
+		e := fmt.Errorf("dns: could not read query entry (%v): %v", msg.Id, err)
+		svc.logger.Error(e)
+		return e
 	}
 
 	q.Responded = true
@@ -138,11 +180,16 @@ func (svc *Service) updateResource(msg dns.Msg) {
 	}
 
 	if err := svc.repository.Update(q); err != nil {
-		svc.logger.Errorf("could not update query entry (%v): %v", msg.Id, err)
+		e := fmt.Errorf("dns: could not update query entry (%v): %v", msg.Id, err)
+		svc.logger.Error(e)
+		return e
 	}
+
+	return nil
 }
 
-func (svc *Service) packMsgAndSend(conn *Conn, msg dns.Msg, req *net.UDPAddr) error {
+// packMsgAndSend handles packing a dns message and sending it over a provided connection.
+func (svc *Service) packMsgAndSend(conn *Conn, msg Msg, req *net.UDPAddr) error {
 	packed, err := msg.Pack()
 	if err != nil {
 		return fmt.Errorf("dns: could not pack dns message: %v", err)
@@ -156,18 +203,11 @@ func (svc *Service) packMsgAndSend(conn *Conn, msg dns.Msg, req *net.UDPAddr) er
 	return nil
 }
 
-func (svc *Service) block(m dns.Msg) dns.Msg {
-	msg := m.Copy()
-	msg.MsgHdr.Response = true
-	msg.MsgHdr.Opcode = dns.RcodeNameError
-	msg.MsgHdr.Authoritative = true
-	msg.Answer = make([]dns.RR, 0)
-
-	return *msg
-}
-
-func newQueryFrom(req net.UDPAddr, msg dns.Msg) *repository.Query {
-	q := &repository.Query{
+// newQueryFrom builds a new Query based on the provided dns message and the requester's address.
+// It will perform minimum validation on the dns message.
+// By default, all new Queries are valid. Check for returned error for an invalid query.
+func newQueryFrom(msg Msg, req net.UDPAddr) (*Query, error) {
+	q := &Query{
 		ID:         int64(msg.Id),
 		UUID:       uuid.NewV4().String(),
 		Originator: req.IP.String(),
@@ -186,24 +226,19 @@ func newQueryFrom(req net.UDPAddr, msg dns.Msg) *repository.Query {
 	}
 
 	if len(msg.Question) == 0 {
-		q.Valid = false
-		log.Printf("repository: msg question not valid: 0 length: %v", msg.Question)
-		return q
+		return nil, errors.New("dns: msg question not valid: length must not be 0")
 	}
 
-	qt, ok := repository.QueryTypeMap[msg.Question[0].Qtype]
+	qt, ok := QueryTypeMap[msg.Question[0].Qtype]
 	if !ok {
-		q.Valid = false
-		log.Printf("repository: query type not mapped: got (%#v)", msg.Question)
-		return q
+		return nil, fmt.Errorf("dns: query type not mapped: got (%#v)", msg.Question)
 	}
 	q.Type = qt
 
-	if msg.MsgHdr.Response {
-		if len(msg.Answer) > 0 {
-			// TODO: handle multiple answers
-			q.Response = strings.TrimSuffix(msg.Answer[0].Header().Name, ".")
-		}
+	if msg.MsgHdr.Response && len(msg.Answer) > 0 {
+		// TODO: handle multiple answers
+		q.Response = strings.TrimSuffix(msg.Answer[0].Header().Name, ".")
+
 	}
 
 	domain := strings.TrimSuffix(msg.Question[0].Name, ".")
@@ -212,5 +247,16 @@ func newQueryFrom(req net.UDPAddr, msg dns.Msg) *repository.Query {
 	q.Domain = domain
 	q.RootDomain = rootDomain
 
-	return q
+	return q, nil
+}
+
+func newBlockedQueryFrom(req net.UDPAddr, msg Msg) (*Query, error) {
+	q, err := newQueryFrom(msg, req)
+	if err != nil {
+		return nil, err
+	}
+	q.Responded = true
+	q.Blocked = true
+
+	return q, nil
 }

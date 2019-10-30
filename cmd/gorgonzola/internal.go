@@ -9,7 +9,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"strconv"
 	"time"
 )
@@ -24,7 +23,9 @@ func registerOnClose(closer io.Closer) {
 
 func closeAll() {
 	for _, c := range toClose {
-		_ = c.Close()
+		if err := c.Close(); err != nil {
+			log.Printf("error closing registered Closer: %v", err)
+		}
 	}
 }
 
@@ -49,26 +50,6 @@ func mustGetEnvInt(value string) int {
 	}
 
 	return i
-}
-
-func bToMb(b uint64) uint64 {
-	return b / 1024 / 1024
-}
-
-func printMemUsage() {
-	var m runtime.MemStats
-	runtime.ReadMemStats(&m)
-	// For info on each, see: https://golang.org/pkg/runtime/#MemStats
-	fmt.Printf("Alloc: %v MB", bToMb(m.Alloc))
-	fmt.Printf("\tTotalAlloc: %v MB", bToMb(m.TotalAlloc))
-	fmt.Printf("\tSys: %v MB", bToMb(m.Sys))
-	fmt.Printf("\tNumGC: %v", m.NumGC)
-	fmt.Printf("\tHeap: alloc (%v) | in use (%v) | object (%v) | released (%v)\n",
-		bToMb(m.HeapAlloc),
-		bToMb(m.HeapInuse),
-		m.HeapObjects,
-		bToMb(m.HeapReleased),
-	)
 }
 
 func newProductionLogger() (*zap.SugaredLogger, error) {

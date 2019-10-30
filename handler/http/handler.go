@@ -3,25 +3,25 @@ package http
 import (
 	"encoding/json"
 	"github.com/foae/gorgonzola/adblock"
+	"github.com/foae/gorgonzola/internal"
 	"net/http"
 	"net/url"
 	"time"
 
 	"github.com/foae/gorgonzola/repository"
 	"github.com/gin-gonic/gin"
-	"go.uber.org/zap"
 )
 
-// Handler defines the structure of a handler.
+// Handler defines the structure of an HTTP handler.
 type Handler struct {
-	logger        *zap.SugaredLogger
+	logger        internal.Logger
 	repository    repository.Interactor
 	parserService *adblock.Service
 }
 
-// Config defines the structure of a handler config.
+// Config defines the structure of an HTTP handler config.
 type Config struct {
-	Logger        *zap.SugaredLogger
+	Logger        internal.Logger
 	Repository    repository.Interactor
 	ParserService *adblock.Service
 }
@@ -52,7 +52,7 @@ func (h *Handler) Data(g *gin.Context) {
 	g.JSON(http.StatusOK, q)
 }
 
-// Data retrieves all the data from the repository.
+// ShouldBlock defines an action of the handler.
 func (h *Handler) ShouldBlock(g *gin.Context) {
 	uurl := g.Param("url")
 	if uurl == "" {
@@ -71,7 +71,7 @@ func (h *Handler) ShouldBlock(g *gin.Context) {
 	g.JSON(http.StatusOK, map[string]bool{"block": shouldBlock})
 }
 
-// AddToBlocklist defines an action at the handler.
+// AddToBlocklist defines an action of the handler.
 func (h *Handler) AddToBlocklist(g *gin.Context) {
 	var input struct {
 		URL string `json:"url"`

@@ -6,12 +6,10 @@ import (
 	"github.com/foae/gorgonzola/adblock"
 	"go.uber.org/zap"
 	"log"
-	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"runtime"
-	"strings"
 	"syscall"
 	"time"
 
@@ -19,7 +17,6 @@ import (
 	httpHandler "github.com/foae/gorgonzola/handler/http"
 	"github.com/foae/gorgonzola/repository"
 	"github.com/gin-gonic/gin"
-	dns2 "github.com/miekg/dns"
 	"github.com/patrickmn/go-cache"
 )
 
@@ -73,19 +70,7 @@ func main() {
 	/*
 		AdBlock Service
 	*/
-	adBlockService := adblock.NewServiceFrom(logger)
-
-	/*
-		Upstream DNS
-	*/
-	ip := net.ParseIP(upstreamDNS)
-	switch {
-	case ip == nil:
-		logger.Fatalf("upstream dns (%v) is not a valid IP", upstreamDNS)
-	case ip.To4() == nil:
-		logger.Fatalf("only IPv4 is supported at this time; not this (%v)", upstreamDNS)
-	}
-	upstreamResolver := &net.UDPAddr{Port: 53, IP: ip}
+	adBlockService := adblock.NewService(logger)
 
 	/*
 		Cache files locally from the provided URLs
@@ -116,7 +101,7 @@ func main() {
 		LOAD AdBlock Plus providers
 	*/
 	for _, fl := range fileList {
-		if err := adBlockService.LoadAdBlockProvidersFromFile(fl); err != nil {
+		if err := adBlockService.LoadAdBlockPlusProviders(fl); err != nil {
 			logger.Errorf("could not load provider: %v", err)
 		}
 	}
@@ -142,7 +127,7 @@ func main() {
 	/*
 		Fire up the UDP listener.
 	*/
-	dnsConn, err := dns.NewUDPConn(localDNSPort, upstreamResolver)
+	dnsConn, err := dns.NewUDPConn(localDNSPort, upstreamDNS)
 	if err != nil {
 		logger.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
 	}
@@ -159,58 +144,8 @@ func main() {
 	*/
 	cctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go func() {
-		logger.Infof("Waiting for messages via UDP on port (%v)...", localDNSPort)
-
-		for {
-			select {
-			case <-ctx.Done():
-				logger.Info("Closed DNS service.")
-				return
-			default:
-				if ctx.Err() != nil {
-					return
-				}
-
-				// Read incoming bytes via UDP.
-				buf := make([]byte, 576, 1024)
-				_, addr, err := dnsConn.ReadFromUDP(buf)
-				switch {
-				case err == nil:
-					// OK.
-				case strings.Contains(err.Error(), "use of closed network connection"):
-					return
-				default:
-					logger.Errorf("could not read from UDP dnsConn: %v", err)
-					continue
-				}
-
-				if !dnsService.CanHandle(addr) {
-					logger.Errorf("cannot handle non-IPv4 request: %v", addr.String())
-					continue
-				}
-
-				// Unpack and validate the received message.
-				var msg dns2.Msg
-				if err := msg.Unpack(buf); err != nil {
-					logger.Errorf("could not read message from (%v)", addr.String())
-					continue
-				}
-
-				// Handle the DNS request.
-				switch msg.MsgHdr.Response {
-				case false:
-					if err := dnsService.HandleInitialRequest(dnsConn, msg, addr); err != nil {
-						logger.Error(err)
-					}
-				default:
-					if err := dnsService.HandleResponseRequest(dnsConn, msg); err != nil {
-						logger.Error(err)
-					}
-				}
-			}
-		}
-	}()
+	go processUdpMessages(cctx, dnsConn, dnsService, logger)
+	logger.Infof("Waiting for messages via UDP on port (%v)...", localDNSPort)
 
 	/*
 		HTTP routes attachment.
