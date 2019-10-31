@@ -1,11 +1,13 @@
 package http
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"github.com/foae/gorgonzola/adblock"
 	"github.com/foae/gorgonzola/internal"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/foae/gorgonzola/repository"
@@ -42,7 +44,7 @@ func (h *Handler) Health(g *gin.Context) {
 }
 
 // Data retrieves all the data from the repository.
-func (h *Handler) Data(g *gin.Context) {
+func (h *Handler) DataDB(g *gin.Context) {
 	q, err := h.repository.FindAll()
 	if err != nil {
 		g.JSON(http.StatusInternalServerError, err.Error())
@@ -50,6 +52,27 @@ func (h *Handler) Data(g *gin.Context) {
 	}
 
 	g.JSON(http.StatusOK, q)
+}
+
+// Data retrieves all the data from the repository.
+func (h *Handler) DataFiles(g *gin.Context) {
+	b64Files, err := h.repository.StoredFilesList(false)
+	if err != nil {
+		g.JSON(http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	fs := make([]string, 0, len(b64Files))
+	for _, b64f := range b64Files {
+		f, err := base64.StdEncoding.DecodeString(b64f)
+		if err != nil {
+			g.JSON(http.StatusInternalServerError, err.Error())
+			return
+		}
+		fs = append(fs, string(f))
+	}
+
+	g.JSON(http.StatusOK, fs)
 }
 
 // ShouldBlock defines an action of the handler.
@@ -60,8 +83,15 @@ func (h *Handler) ShouldBlock(g *gin.Context) {
 		return
 	}
 
+	uurl = strings.TrimPrefix(uurl, "/")
+	u, err := url.Parse("http://" + uurl)
+	if err != nil {
+		g.JSON(http.StatusBadRequest, err.Error())
+		return
+	}
+
 	ts := time.Now()
-	shouldBlock, err := h.parserService.ShouldBlock(uurl)
+	shouldBlock, err := h.parserService.ShouldBlock(u.String())
 	if err != nil {
 		g.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return

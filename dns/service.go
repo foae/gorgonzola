@@ -52,10 +52,11 @@ func (svc *Service) HandleInitialRequest(conn *Conn, msg Msg, addr *net.UDPAddr)
 		return nil
 	}
 
-	svc.logger.Debugf("Initial query for (%v) from (%v)...", msg.Question[0].Name, addr.IP.String())
+	reqDomain := strings.TrimSuffix(msg.Question[0].Name, ".")
+	svc.logger.Debugf("Initial query for (%v) from (%v)...", reqDomain, addr.IP.String())
 
 	// Check if this query can be blocked.
-	shouldBlock, err := svc.adblocker.ShouldBlock(msg.Question[0].Name)
+	shouldBlock, err := svc.adblocker.ShouldBlock(reqDomain)
 	switch {
 	case err != nil:
 		svc.logger.Errorf("dns: could not run the adblocker service: %v", err)
@@ -73,7 +74,7 @@ func (svc *Service) HandleInitialRequest(conn *Conn, msg Msg, addr *net.UDPAddr)
 			return err
 		}
 
-		svc.logger.Infof("Blocked (%v) in msg (%v)", msg.Question[0].Name, msg.Id)
+		svc.logger.Infof("Blocked (%v) in msg (%v)", reqDomain, msg.Id)
 		return nil
 	}
 

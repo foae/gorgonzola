@@ -46,7 +46,7 @@ const (
 type Interactor interface {
 	Close() error
 	Queryable
-	StoredFilesList() ([]string, error)
+	StoredFilesList(withPath bool) ([]string, error)
 	DownloadFromURL(someURL string) error
 }
 
@@ -144,7 +144,8 @@ func (r *Repo) DownloadFromURL(someURL string) error {
 
 // StoredFilesList reads all files from the local file storage directory,
 // returning the full path of each file found.
-func (r *Repo) StoredFilesList() ([]string, error) {
+// Only the file names are base64 encoded while the paths are raw.
+func (r *Repo) StoredFilesList(withPath bool) ([]string, error) {
 	fileHandler, err := os.Open(r.fileStoragePath)
 	if err != nil {
 		return nil, fmt.Errorf("repo: could not open (%v): %v", r.fileStoragePath, err)
@@ -158,7 +159,12 @@ func (r *Repo) StoredFilesList() ([]string, error) {
 
 	fileList := make([]string, 0, len(rawFileList))
 	for _, f := range rawFileList {
-		fileList = append(fileList, r.fileStoragePath+fileSeparator+f)
+		switch withPath {
+		case true:
+			fileList = append(fileList, r.fileStoragePath+fileSeparator+f)
+		default:
+			fileList = append(fileList, f)
+		}
 	}
 
 	return fileList, nil

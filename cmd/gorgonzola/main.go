@@ -7,6 +7,7 @@ import (
 	"go.uber.org/zap"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"os/signal"
 	"runtime"
@@ -76,12 +77,18 @@ func main() {
 		Cache files locally from the provided URLs
 	*/
 	//urls := []string{
-	//	"https://austinhuang.me/0131-block-list/list.txt",
-	//	"https://280blocker.net/files/280blocker_adblock_nanj_supp.txt",
-	//	"https://raw.githubusercontent.com/EnergizedProtection/block/master/porn/formats/filter",
-	//	"https://raw.githubusercontent.com/DandelionSprout/adfilt/master/NorwegianExperimentalList%20alternate%20versions/NordicFiltersABP.txt",
-	//	"https://raw.githubusercontent.com/Crystal-RainSlide/AdditionalFiltersCN/master/all.txt",
-	//	"https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts", // hosts file
+	//"https://austinhuang.me/0131-block-list/list.txt",
+	//"https://280blocker.net/files/280blocker_adblock_nanj_supp.txt",
+	//"https://raw.githubusercontent.com/EnergizedProtection/block/master/porn/formats/filter",
+	//"https://raw.githubusercontent.com/DandelionSprout/adfilt/master/NorwegianExperimentalList%20alternate%20versions/NordicFiltersABP.txt",
+	//"https://raw.githubusercontent.com/Crystal-RainSlide/AdditionalFiltersCN/master/all.txt",
+	//"https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts", // hosts file
+	//"https://raw.githubusercontent.com/tcptomato/ROad-Block/master/road-block-filters.txt",
+	//"https://easylist.to/easylist/easylist.txt",
+	//"https://easylist-downloads.adblockplus.org/easylistdutch.txt",
+	//"https://easylist-downloads.adblockplus.org/easyprivacy+easylist.txt",
+	//"https://easylist-downloads.adblockplus.org/rolist+easylist.txt",
+	//"https://easylist.to/easylist/easyprivacy.txt",
 	//}
 	//for _, u := range urls {
 	//	if err := repo.DownloadFromURL(u); err != nil {
@@ -92,7 +99,7 @@ func main() {
 	/*
 		Read files from local storage
 	*/
-	fileList, err := repo.StoredFilesList()
+	fileList, err := repo.StoredFilesList(true)
 	if err != nil {
 		log.Fatalf("could not list files: %v", err)
 	}
@@ -100,10 +107,8 @@ func main() {
 	/*
 		LOAD AdBlock Plus providers
 	*/
-	for _, fl := range fileList {
-		if err := adBlockService.LoadAdBlockPlusProviders(fl); err != nil {
-			logger.Errorf("could not load provider: %v", err)
-		}
+	if err := adBlockService.LoadAdBlockPlusProviders(fileList); err != nil {
+		logger.Debugf("could not load file provider, skipped: %v", err)
 	}
 
 	/*
@@ -157,8 +162,9 @@ func main() {
 	})
 	router.POST("/blocklist", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
-	router.GET("/data", handler.Data)
-	router.GET("/query/:url", handler.ShouldBlock)
+	router.GET("/data/db", handler.DataDB)
+	router.GET("/data/files", handler.DataFiles)
+	router.GET("/query/*url", handler.ShouldBlock)
 
 	srv := http.Server{
 		Addr:    localHTTPPort,
@@ -174,6 +180,20 @@ func main() {
 		case err != nil:
 			logger.Fatalf("HTTP listener closed with an error: %v", err)
 		}
+	}()
+
+	go func() {
+		pport := "127.0.0.1:8001"
+
+		r := http.NewServeMux()
+		r.HandleFunc("/debug/pprof/", pprof.Index)
+		r.HandleFunc("/debug/pprof/cmdline", pprof.Cmdline)
+		r.HandleFunc("/debug/pprof/profile", pprof.Profile)
+		r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
+		r.HandleFunc("/debug/pprof/trace", pprof.Trace)
+
+		logger.Debugf("Attached pprof mux on port (%v)", pport)
+		logger.Fatal(http.ListenAndServe(pport, r))
 	}()
 
 	ips, err := getIPAddr()
