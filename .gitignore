@@ -8,10 +8,11 @@
 *.dll
 *.so
 *.dylib
-repository/tmp/
-repository/_db/
-repository/file_storage/
+repository/tmp/*
+repository/_db/*
+!repository/_db/.gitignore
 repository/file_storage/*
+!repository/file_storage/.gitignore
 
 # Test binary, built with `go test -c`
 *.test
