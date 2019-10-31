@@ -74,29 +74,6 @@ func main() {
 	adBlockService := adblock.NewService(logger)
 
 	/*
-		Cache files locally from the provided URLs
-	*/
-	//urls := []string{
-	//"https://austinhuang.me/0131-block-list/list.txt",
-	//"https://280blocker.net/files/280blocker_adblock_nanj_supp.txt",
-	//"https://raw.githubusercontent.com/EnergizedProtection/block/master/porn/formats/filter",
-	//"https://raw.githubusercontent.com/DandelionSprout/adfilt/master/NorwegianExperimentalList%20alternate%20versions/NordicFiltersABP.txt",
-	//"https://raw.githubusercontent.com/Crystal-RainSlide/AdditionalFiltersCN/master/all.txt",
-	//"https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts", // hosts file
-	//"https://raw.githubusercontent.com/tcptomato/ROad-Block/master/road-block-filters.txt",
-	//"https://easylist.to/easylist/easylist.txt",
-	//"https://easylist-downloads.adblockplus.org/easylistdutch.txt",
-	//"https://easylist-downloads.adblockplus.org/easyprivacy+easylist.txt",
-	//"https://easylist-downloads.adblockplus.org/rolist+easylist.txt",
-	//"https://easylist.to/easylist/easyprivacy.txt",
-	//}
-	//for _, u := range urls {
-	//	if err := repo.DownloadFromURL(u); err != nil {
-	//		logger.Debugf("error for (%v): %v", u, err)
-	//	}
-	//}
-
-	/*
 		Read files from local storage
 	*/
 	fileList, err := repo.StoredFilesList(true)

@@ -46,8 +46,8 @@ const (
 type Interactor interface {
 	Close() error
 	Queryable
-	StoredFilesList(withPath bool) ([]string, error)
-	DownloadFromURL(someURL string) error
+	StoredFilesList(withPath bool) (storedFiles []string, err error)
+	DownloadFromURL(someURL string) (storedFile string, err error)
 }
 
 // Config defines the configurable dependencies.
@@ -110,36 +110,37 @@ func NewRepo(cfg Config) (*Repo, error) {
 
 // DownloadFromURL parses and validates an HTTP URL and downloads the remote contents.
 // It is used to download and create a local cache of AdBlock Plus / Domains lists and other formats.
-func (r *Repo) DownloadFromURL(someURL string) error {
+func (r *Repo) DownloadFromURL(someURL string) (string, error) {
 	uurl, err := url.Parse(someURL)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	r.logger.Debugf("Downloading: %v", someURL)
 	resp, err := http.Get(uurl.String())
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer resp.Body.Close()
 
 	fileName := base64.StdEncoding.EncodeToString([]byte(someURL))
-	fileHandler, err := os.Create(r.fileStoragePath + fileSeparator + fileName)
+	fileWithPath := r.fileStoragePath + fileSeparator + fileName
+	fileHandler, err := os.Create(fileWithPath)
 	if err != nil {
-		return fmt.Errorf("repo: could not create file name (%v): %v", fileName, err)
+		return "", fmt.Errorf("repo: could not create file name (%v): %v", fileName, err)
 	}
 	defer fileHandler.Close() // nolint
 
 	if _, err := io.Copy(fileHandler, resp.Body); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := fileHandler.Sync(); err != nil {
-		return err
+		return "", err
 	}
 
 	r.logger.Debugf("Wrote contents of (%v) to file (%v/%v)", someURL, r.fileStoragePath, fileName)
-	return nil
+	return fileWithPath, nil
 }
 
 // StoredFilesList reads all files from the local file storage directory,

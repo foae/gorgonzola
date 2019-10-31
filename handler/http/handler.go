@@ -113,10 +113,40 @@ func (h *Handler) AddToBlocklist(g *gin.Context) {
 	}
 	defer g.Request.Body.Close() // nolint
 
-	_, err := url.Parse(input.URL)
+	uurl, err := url.Parse(input.URL)
 	if err != nil {
 		h.logger.Errorf("url: %v", err)
 		g.Status(http.StatusBadRequest)
+		return
+	}
+
+	/*
+		Cache files locally from the provided URLs
+	*/
+	//urls := []string{
+	//	"https://austinhuang.me/0131-block-list/list.txt",
+	//	"https://280blocker.net/files/280blocker_adblock_nanj_supp.txt",
+	//	"https://raw.githubusercontent.com/EnergizedProtection/block/master/porn/formats/filter",
+	//	"https://raw.githubusercontent.com/DandelionSprout/adfilt/master/NorwegianExperimentalList%20alternate%20versions/NordicFiltersABP.txt",
+	//	"https://raw.githubusercontent.com/Crystal-RainSlide/AdditionalFiltersCN/master/all.txt",
+	//	"https://raw.githubusercontent.com/StevenBlack/hosts/master/alternates/fakenews-gambling-porn/hosts", // hosts file
+	//	"https://raw.githubusercontent.com/tcptomato/ROad-Block/master/road-block-filters.txt",
+	//	"https://easylist.to/easylist/easylist.txt",
+	//	"https://easylist-downloads.adblockplus.org/easylistdutch.txt",
+	//	"https://easylist-downloads.adblockplus.org/easyprivacy+easylist.txt",
+	//	"https://easylist-downloads.adblockplus.org/rolist+easylist.txt",
+	//	"https://easylist.to/easylist/easyprivacy.txt",
+	//}
+	storedFile, err := h.repository.DownloadFromURL(uurl.String())
+	if err != nil {
+		h.logger.Errorf("error for (%v): %v", uurl.String(), err)
+		g.Status(http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.parserService.LoadAdBlockPlusProviders([]string{storedFile}); err != nil {
+		h.logger.Errorf("error for (%v): %v", uurl.String(), err)
+		g.Status(http.StatusInternalServerError)
 		return
 	}
 
