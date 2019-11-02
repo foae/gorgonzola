@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/foae/gorgonzola/adblock"
+	"github.com/joho/godotenv"
 	"go.uber.org/zap"
 	"log"
 	"net/http"
@@ -22,23 +23,45 @@ import (
 )
 
 const (
-	envDev  = "dev"
-	envProd = "prod"
+	envModeDev  = "dev"
+	envModeProd = "prod"
 )
+
+// defaultEnvVars represents the minimum and sensible
+// environment variables needed for this program to work.
+var defaultEnvVars = envVars{
+	HTTP_LISTEN_ADDR:         "127.0.0.1:8000",
+	HTTP_PPROF_LISTEN_ADDR:   "127.0.0.1:8001",
+	DNS_LISTEN_ADDR:          ":53",
+	UPSTREAM_DNS_SERVER_ADDR: "116.203.111.0:53",
+	ENV_MODE:                 "dev",
+}
+
+// envVars describes the configurable environment variables.
+// Check .env.example for a full explanation.
+type envVars struct {
+	HTTP_LISTEN_ADDR         string `json:"HTTP_LISTEN_ADDR"`
+	HTTP_PPROF_LISTEN_ADDR   string `json:"HTTP_PPROF_LISTEN_ADDR"`
+	DNS_LISTEN_ADDR          string `json:"DNS_LISTEN_ADDR"`
+	UPSTREAM_DNS_SERVER_ADDR string `json:"UPSTREAM_DNS_SERVER_ADDR"`
+	ENV_MODE                 string `json:"ENV_MODE"`
+}
 
 func main() {
 	/*
 		ENV vars
 	*/
-	upstreamDNS := mustGetEnv("UPSTREAM_DNS_SERVER_IP")
-	localDNSPort := mustGetEnvInt("DNS_LISTEN_PORT")
-	localHTTPPort := mustGetEnv("HTTP_LISTEN_ADDR")
-	env := os.Getenv("ENV")
-	if env != envDev {
-		env = envProd
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Could not load .env file, will use default values.")
+	}
+	upstreamDnsAddr := fromEnv("UPSTREAM_DNS_SERVER_ADDR", defaultEnvVars.UPSTREAM_DNS_SERVER_ADDR)
+	localDNSAddr := fromEnv("DNS_LISTEN_ADDR", defaultEnvVars.DNS_LISTEN_ADDR)
+	localHTTPPort := fromEnv("HTTP_LISTEN_ADDR", defaultEnvVars.HTTP_LISTEN_ADDR)
+	env := fromEnv("ENV_MODE", defaultEnvVars.ENV_MODE)
+	if env != envModeDev {
+		env = envModeProd
 	}
 
-	ctx := context.Background()
 	hostname, err := os.Hostname()
 	if err != nil {
 		hostname = fmt.Sprintf("pid-%v-ts-%v", os.Getpid(), time.Now().UnixNano())
@@ -49,7 +72,7 @@ func main() {
 	*/
 	var logger *zap.SugaredLogger
 	switch env {
-	case envDev:
+	case envModeDev:
 		logger, err = newDevelopmentLogger()
 	default:
 		logger, err = newProductionLogger()
@@ -84,20 +107,19 @@ func main() {
 	/*
 		LOAD AdBlock Plus providers
 	*/
-	if err := adBlockService.LoadAdBlockPlusProviders(fileList); err != nil {
-		logger.Debugf("could not load file provider, skipped: %v", err)
-	}
+	//if err := adBlockService.LoadAdBlockPlusProviders(fileList); err != nil {
+	//	logger.Debugf("could not load file provider, skipped: %v", err)
+	//}
+	_ = fileList
 
 	/*
 		Setup HTTP Router
 	*/
 	switch env {
-	case envDev:
-		gin.SetMode(gin.DebugMode)
-	case envProd:
+	case envModeProd:
 		gin.SetMode(gin.ReleaseMode)
 	default:
-		gin.SetMode(gin.TestMode)
+		gin.SetMode(gin.DebugMode)
 	}
 	router := gin.Default()
 
@@ -109,9 +131,9 @@ func main() {
 	/*
 		Fire up the UDP listener.
 	*/
-	dnsConn, err := dns.NewUDPConn(localDNSPort, upstreamDNS)
+	dnsConn, err := dns.NewUDPConn(localDNSAddr, upstreamDnsAddr, logger)
 	if err != nil {
-		logger.Fatalf("could not listen on port (%v) UDP: %v", localDNSPort, err)
+		logger.Fatalf("could not listen on port (%v) UDP: %v", localDNSAddr, err)
 	}
 	dnsConn.WithConfig(dns.Config{Logger: logger})
 	registerOnClose(dnsConn)
@@ -124,10 +146,10 @@ func main() {
 	/*
 		Process UDP messages.
 	*/
-	cctx, cancel := context.WithCancel(ctx)
+	cctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go processUdpMessages(cctx, dnsConn, dnsService, logger)
-	logger.Infof("Waiting for messages via UDP on port (%v)...", localDNSPort)
+	logger.Infof("Waiting for messages via UDP on port (%v)...", localDNSAddr)
 
 	/*
 		HTTP routes attachment.
@@ -137,7 +159,7 @@ func main() {
 		Repository:    repo,
 		ParserService: adBlockService,
 	})
-	router.POST("/blocklist", handler.AddToBlocklist)
+	router.POST("/block", handler.AddToBlocklist)
 	router.GET("/health", handler.Health)
 	router.GET("/data/db", handler.DataDB)
 	router.GET("/data/files", handler.DataFiles)
@@ -160,7 +182,7 @@ func main() {
 	}()
 
 	go func() {
-		pport := "127.0.0.1:8001"
+		pport := fromEnv("HTTP_PPROF_LISTEN_ADDR", defaultEnvVars.HTTP_PPROF_LISTEN_ADDR)
 
 		r := http.NewServeMux()
 		r.HandleFunc("/debug/pprof/", pprof.Index)
@@ -169,8 +191,14 @@ func main() {
 		r.HandleFunc("/debug/pprof/symbol", pprof.Symbol)
 		r.HandleFunc("/debug/pprof/trace", pprof.Trace)
 
-		logger.Debugf("Attached pprof mux on port (%v)", pport)
-		logger.Fatal(http.ListenAndServe(pport, r))
+		logger.Infof("Attached pprof mux on address (%v)", pport)
+		err := http.ListenAndServe(pport, r)
+		switch {
+		case err == http.ErrServerClosed:
+			logger.Info(err)
+		case err != nil:
+			log.Fatalf("pprof mux error: %v", err)
+		}
 	}()
 
 	ips, err := getIPAddr()

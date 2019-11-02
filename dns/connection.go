@@ -1,9 +1,10 @@
 package dns
 
 import (
+	"errors"
 	"fmt"
 	"github.com/foae/gorgonzola/internal"
-	"log"
+	"go.uber.org/zap"
 	"net"
 	"sync"
 )
@@ -25,26 +26,41 @@ type Config struct {
 }
 
 // NewUDPConn returns an instantiated connection based on the provided dependencies.
-func NewUDPConn(localDNSPort int, upstreamResolver string) (*Conn, error) {
-	if localDNSPort <= 0 {
-		return nil, fmt.Errorf("dns: port must be greater than 0; passed (%v)", localDNSPort)
+func NewUDPConn(localDnsServerAddr string, upstreamResolver string, logger *zap.SugaredLogger) (*Conn, error) {
+	if localDnsServerAddr == "" {
+		return nil, errors.New("dns: passed an empty local DNS server address")
+	}
+	if upstreamResolver == "" {
+		return nil, errors.New("dns: passed an empty upstream DNS server address")
 	}
 
-	ip, err := toIP(upstreamResolver)
+	localAddr, err := net.ResolveUDPAddr("udp", localDnsServerAddr)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("dns: local dns address (%v) is not valid: %v", localAddr, err)
+	case localAddr.Port == 0:
+		localAddr.Port = 53
+	}
+
+	upRes, err := net.ResolveUDPAddr("udp", upstreamResolver)
+	switch {
+	case err != nil:
+		return nil, fmt.Errorf("dns: upstream dns address (%v) is not valid: %v", upRes, err)
+	case upRes.Port == 0:
+		upRes.Port = 53
+	}
+
+	conn, err := net.ListenUDP("udp", localAddr)
 	if err != nil {
-		return nil, err
-	}
-	up := &net.UDPAddr{Port: localDNSPort, IP: ip}
-
-	conn, err := net.ListenUDP("udp", &net.UDPAddr{Port: localDNSPort})
-	if err != nil {
-		return nil, fmt.Errorf("dns: could not listen on port (%v) UDP: %v", localDNSPort, err)
+		return nil, fmt.Errorf("dns: could not listen on address (%v) UDP: %v", localDnsServerAddr, err)
 	}
 
-	log.Printf("dns: started UDP resolver on port (%v)", localDNSPort)
+	logger.Infof("Started local DNS forwarder on address (%v)", localAddr)
+	logger.Infof("Registered upstream DNS resolver on address (%v)", upRes)
 	return &Conn{
 		udpConn:          conn,
-		upstreamResolver: up,
+		upstreamResolver: upRes,
+		logger:           logger,
 		m:                &sync.RWMutex{},
 	}, nil
 }
@@ -57,15 +73,16 @@ func (c *Conn) WithConfig(cfg Config) {
 	}
 
 	if cfg.UpstreamResolver != "" {
-		ip, err := toIP(cfg.UpstreamResolver)
+		upRes, err := net.ResolveUDPAddr("udp", cfg.UpstreamResolver)
 		if err != nil {
 			c.logger.Errorf("dns: failed to parse upstream DNS address in new config: %v", err)
 			return
 		}
 
 		c.m.Lock()
-		c.upstreamResolver = &net.UDPAddr{IP: ip, Port: 53, Zone: ""}
+		c.upstreamResolver = upRes
 		c.m.Unlock()
+		c.logger.Infof("Registered upstream DNS resolver on address (%v)", upRes)
 	}
 }
 
@@ -78,17 +95,4 @@ func (c *Conn) ReadFromUDP(buf []byte) (int, *net.UDPAddr, error) {
 // Close closes the underlying udp connection.
 func (c *Conn) Close() error {
 	return c.udpConn.Close()
-}
-
-// toIP validates and parses a string-based IP address.
-func toIP(in string) (net.IP, error) {
-	ip := net.ParseIP(in)
-	switch {
-	case ip == nil:
-		return nil, fmt.Errorf("dns: upstream dns (%v) is not a valid IP", in)
-	case ip.To4() == nil:
-		return nil, fmt.Errorf("dns: only IPv4 is supported at this time; passed (%v)", in)
-	}
-
-	return ip, nil
 }

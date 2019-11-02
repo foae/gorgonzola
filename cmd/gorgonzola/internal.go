@@ -29,27 +29,34 @@ func closeAll() {
 	}
 }
 
-func mustGetEnv(value string) string {
-	v := os.Getenv(value)
-	if v == "" {
-		log.Fatalf("could not retrieve needed value (%v) from the environment", value)
+func fromEnv(envParam string, defaultValue string) string {
+	v := os.Getenv(envParam)
+	if v != "" {
+		return v
 	}
 
-	return v
+	if defaultValue == "" {
+		log.Fatalf("envParam (%v) needs a value from ENV or a default. Both were empty, will stop here.", envParam)
+	}
+
+	return defaultValue
 }
 
-func mustGetEnvInt(value string) int {
-	v := os.Getenv(value)
-	if v == "" {
-		log.Fatalf("could not retrieve needed value (%v) from the environment", value)
+func fromEnvInt(envParam string, defaultValue int) int {
+	v := fromEnv(envParam, "def")
+	switch {
+	case v == "def" && defaultValue == 0:
+		log.Fatalf("envParam (%v) needs a value from ENV or a default. Both were empty, will stop here.", envParam)
+	case v != "def":
+		i, err := strconv.Atoi(v)
+		if err != nil {
+			log.Fatalf("envParam (%v): could not convert needed value (%v) from string to int: %v", envParam, v, err)
+		}
+
+		return i
 	}
 
-	i, err := strconv.Atoi(v)
-	if err != nil {
-		log.Fatalf("could not convert needed value (%v) from string to int: %v", value, err)
-	}
-
-	return i
+	return defaultValue
 }
 
 func newProductionLogger() (*zap.SugaredLogger, error) {
