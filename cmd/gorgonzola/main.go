@@ -107,10 +107,9 @@ func main() {
 	/*
 		LOAD AdBlock Plus providers
 	*/
-	//if err := adBlockService.LoadAdBlockPlusProviders(fileList); err != nil {
-	//	logger.Debugf("could not load file provider, skipped: %v", err)
-	//}
-	_ = fileList
+	if err := adBlockService.LoadAdBlockPlusProviders(fileList); err != nil {
+		logger.Debugf("could not load file provider, skipped: %v", err)
+	}
 
 	/*
 		Setup HTTP Router
