@@ -8,6 +8,7 @@
 *.dll
 *.so
 *.dylib
+dev-service-account.json
 repository/tmp/*
 repository/_db/*
 !repository/_db/.gitignore
