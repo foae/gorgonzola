@@ -55,6 +55,7 @@ to use the log details in the Stackdriver monitoring interface.
 * [`Label`](#label)
 * [`SourceLocation`](#sourcelocation)
 * [`Operation`](#operation)
+* [`TraceContext`](#tracecontext)
 
 #### HTTP
 
@@ -204,6 +205,21 @@ convenience functions:
 OperationStart(id, producer string) zap.Field
 OperationCont(id, producer string) zap.Field
 OperationEnd(id, producer string) zap.Field
+```
+
+#### TraceContext
+
+You can add trace context information to your log lines to be picked up by
+Stackdriver.
+
+```golang
+TraceContext(trace string, spanId string, sampled bool, projectName string) []zap.Field
+```
+
+Like so:
+
+```golang
+logger.Error("Something happened!", zapdriver.TraceContext("105445aa7843bc8bf206b120001000", "0", true, "my-project-name")...)
 ```
 
 ### Pre-configured Stackdriver-optimized encoder

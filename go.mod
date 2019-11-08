@@ -3,7 +3,7 @@ module github.com/foae/gorgonzola
 go 1.13
 
 require (
-	github.com/blendle/zapdriver v1.2.1
+	github.com/blendle/zapdriver v1.3.1
 	github.com/bluele/adblock v0.0.0-20150928111208-97547036a6ec
 	github.com/gin-contrib/sse v0.1.0 // indirect
 	github.com/gin-gonic/gin v1.4.0
@@ -18,11 +18,12 @@ require (
 	github.com/pmezard/adblock v0.0.0-20171028110701-edfb97ad89cd
 	github.com/satori/go.uuid v1.2.0
 	github.com/ugorji/go v1.1.7 // indirect
+	go.uber.org/multierr v1.4.0 // indirect
 	go.uber.org/zap v1.12.0
-	golang.org/x/crypto v0.0.0-20191029031824-8986dd9e96cf // indirect
-	golang.org/x/net v0.0.0-20191101175033-0deb6923b6d9 // indirect
-	golang.org/x/sys v0.0.0-20191029155521-f43be2a4598c // indirect
-	golang.org/x/tools v0.0.0-20191101200257-8dbcdeb83d3f // indirect
+	golang.org/x/crypto v0.0.0-20191107222254-f4817d981bb6 // indirect
+	golang.org/x/net v0.0.0-20191108063844-7e6e90b9ea88 // indirect
+	golang.org/x/sys v0.0.0-20191105231009-c1f44814a5cd // indirect
+	golang.org/x/tools v0.0.0-20191107235519-f7ea15e60b12 // indirect
 	google.golang.org/appengine v1.6.5 // indirect
-	gopkg.in/yaml.v2 v2.2.4 // indirect
+	gopkg.in/yaml.v2 v2.2.5 // indirect
 )
