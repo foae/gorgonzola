@@ -14,6 +14,7 @@ repository/_db/*
 !repository/_db/.gitignore
 repository/file_storage/*
 !repository/file_storage/.gitignore
+!bin/.gitignore
 
 # Test binary, built with `go test -c`
 *.test
