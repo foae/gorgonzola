@@ -75,12 +75,14 @@ func NewRepo(cfg Config) (*Repo, error) {
 	}
 
 	/*
-		Create the folder for file storage.
+		Create the folders for file storage:
+		* SQLite
+		* file storage (local cache)
 	*/
-	if err := os.MkdirAll(sqliteDirectoryPath, os.ModeDir); err != nil {
+	if err := os.MkdirAll(sqliteDirectoryPath, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("repo: could not create directories in path (%v): %v", sqliteDirectoryPath, err)
 	}
-	if err := os.MkdirAll(fileDirectoryPath, os.ModeDir); err != nil {
+	if err := os.MkdirAll(fileDirectoryPath, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("repo: could not create directories in path (%v): %v", fileDirectoryPath, err)
 	}
 
