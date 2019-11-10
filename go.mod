@@ -20,10 +20,10 @@ require (
 	github.com/ugorji/go v1.1.7 // indirect
 	go.uber.org/multierr v1.4.0 // indirect
 	go.uber.org/zap v1.12.0
-	golang.org/x/crypto v0.0.0-20191107222254-f4817d981bb6 // indirect
-	golang.org/x/net v0.0.0-20191108063844-7e6e90b9ea88 // indirect
+	golang.org/x/crypto v0.0.0-20191108234033-bd318be0434a // indirect
+	golang.org/x/net v0.0.0-20191109021931-daa7c04131f5 // indirect
 	golang.org/x/sys v0.0.0-20191105231009-c1f44814a5cd // indirect
-	golang.org/x/tools v0.0.0-20191107235519-f7ea15e60b12 // indirect
+	golang.org/x/tools v0.0.0-20191109212701-97ad0ed33101 // indirect
 	google.golang.org/appengine v1.6.5 // indirect
 	gopkg.in/yaml.v2 v2.2.5 // indirect
 )
