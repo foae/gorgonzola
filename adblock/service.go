@@ -2,7 +2,6 @@ package adblock
 
 import (
 	"fmt"
-	bluele "github.com/bluele/adblock"
 	"github.com/foae/gorgonzola/internal"
 	pmezard "github.com/pmezard/adblock/adblock"
 	"net/url"
@@ -18,18 +17,16 @@ type Servicer interface {
 // Service describes the intimate (woah)
 // structure of a Servicer implementation.
 type Service struct {
-	adblockRules []*bluele.Rules
-	adbRules     *pmezard.RuleMatcher
-	logger       internal.Logger
+	adbRules *pmezard.RuleMatcher
+	logger   internal.Logger
 }
 
 // NewService returns an instance of the Service
 // based on configurable dependencies.
 func NewService(logger internal.Logger) *Service {
 	return &Service{
-		adblockRules: make([]*bluele.Rules, 0),
-		adbRules:     new(pmezard.RuleMatcher),
-		logger:       logger,
+		adbRules: new(pmezard.RuleMatcher),
+		logger:   logger,
 	}
 }
 
@@ -61,15 +58,6 @@ func (svc *Service) LoadAdBlockPlusProviders(files []string) error {
 		return err
 	}
 
-	/*
-		Load <bluele> provider
-	*/
-	for _, cf := range collectedFiles {
-		if err := svc.loadAdBlockPlusProviderBluele(cf); err != nil {
-			return err
-		}
-	}
-
 	return nil
 }
 
@@ -87,23 +75,6 @@ func (svc *Service) loadAdBlockPlusProviderPmezard(files []string) error {
 	return nil
 }
 
-// <<bluele>>
-func (svc *Service) loadAdBlockPlusProviderBluele(filePath string) error {
-	adblockRules, err := bluele.NewRulesFromFile(filePath, &bluele.RulesOption{
-		Supports:              nil,
-		CheckUnsupportedRules: false,
-	})
-	switch {
-	case err != nil:
-		return err
-	default:
-		svc.adblockRules = append(svc.adblockRules, adblockRules)
-		svc.logger.Debugf("Loaded <bluele> with (%v) rules.", len(adblockRules.BlackList()))
-	}
-
-	return nil
-}
-
 // ShouldBlock decides whether a given URL should be blocked or not.
 // Minimum validation is done, the caller should take care
 // of sending a correctly formatted FQDN.
@@ -112,8 +83,6 @@ func (svc *Service) ShouldBlock(someURL string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("(%v) is not a valid URL: %v", someURL, err)
 	}
-
-	var shouldBlock bool
 
 	ts := time.Now()
 	found, ruleNo, err := svc.adbRules.Match(&pmezard.Request{
@@ -126,21 +95,9 @@ func (svc *Service) ShouldBlock(someURL string) (bool, error) {
 	case err != nil:
 		svc.logger.Debugf("pmezard error: %v", err)
 	case found:
-		shouldBlock = true
 		svc.logger.Debugf("Searched for (%v) in (<pmezard> rule #%v: %v): %v", uurl, ruleNo, time.Since(ts), found)
-
+		return true, nil
 	}
 
-	for idx, rule := range svc.adblockRules {
-		ts := time.Now()
-		found := rule.ShouldBlock(uurl.String(), map[string]interface{}{
-			"domain": uurl.Hostname(),
-		})
-		if found {
-			shouldBlock = true
-			svc.logger.Debugf("Searched for (%v) in (<bluele> #%v: %v): %v", uurl, idx, time.Since(ts), found)
-		}
-	}
-
-	return shouldBlock, nil
+	return false, nil
 }

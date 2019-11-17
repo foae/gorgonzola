@@ -22,7 +22,7 @@ func PeekFile(fullFilePath string, peekSize int) ([]byte, error) {
 	_, err = fh.Read(buf)
 	_ = fh.Close()
 	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("repo: could not read file (%v): %v", fullFilePath, err)
+		return nil, fmt.Errorf("adblock: could not peek file (%v): %v", fullFilePath, err)
 	}
 
 	return buf, nil
